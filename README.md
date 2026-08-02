@@ -70,6 +70,46 @@ GitHub：[pigeon160/DuiPai-Checker](https://github.com/pigeon160/DuiPai-Checker)
 
 ---
 
+## 对拍输入 DSL（指令式语言）
+
+内置生成器提供 **图形化配置** 与 **DSL 文本** 上下对照显示：上半区是图形化变量
+列表，下半区是同步显示的 DSL 脚本（编辑图形化时 DSL 实时更新；也可直接编辑 DSL
+后点“应用（转为图形化）”转回图形化）。DSL 作为底层格式，所有数值位置都支持
+表达式：常数、引用前面变量、`2*n` 等算术、以及 `int(a,b)` / `float(a,b)` 范围随机。
+
+```
+# 每条语句一行；# 为注释；顺序执行，可引用前面定义的名字
+n  = int(1, 100)            # 整数变量，随机 [1,100]，输出一行
+x  = float(0, 1)            # 浮点变量（默认6位精度）
+x4 = float(0, 1, 4)         # 浮点变量，精度4位
+a  = ints(n, 1, 9)          # 数组：一行 n 个整数，范围 [1,9]
+b  = floats(3, 0, 1)        # 数组：一行 3 个浮点
+c  = ints(int(1,5), 1, 9)   # 数组：个数随机 1~5
+d  = ints(2*n, 0, 1)        # 数组：个数 = 表达式
+M  = matrix(2, n, 0, 1)     # 数组：2 行 × n 列整数（多行）
+p  = perm(n)                # 排列：一行 1..n 的随机排列
+t  = tree(n)                # 树：首行 n + n-1 条边，无边权
+t2 = tree(n, int(1, 10))    # 树 + 整数边权
+t3 = tree(n, float(0, 1, 4))# 树 + 浮点边权，精度4
+g  = graph(n, m, 1, 0, int(1,10))  # 图：n 顶点 m 边（第3/4位为有向/连通）
+```
+
+| 命令 | 参数 | 输出 |
+| --- | --- | --- |
+| `int` | `lo, hi` | 一行 1 个整数 |
+| `float` | `lo, hi[, prec]` | 一行 1 个浮点 |
+| `ints` / `floats` | `n, lo, hi[, prec]` | 一行 n 个元素（一维数组） |
+| `matrix` / `matf` | `r, c, lo, hi[, prec]` | r 行 × c 列元素（多行数组） |
+| `perm` | `n` | 一行 `1..n` 随机排列 |
+| `tree` | `n[, 边权]` | 首行 `n` + n-1 条边 |
+| `graph` | `n, m, 有向, 连通[, 边权]` | 首行 `n m` + m 条边 |
+
+> 引用规则：只能引用前面定义的名字；数组不可作为引用源；`perm`/`tree`/`graph`
+> 被引用时取其规模值。DSL 无法用图形化下拉表达的表达式（如 `rows=2*n`）会以
+> 只读“表达式(DSL)：...”选项保留，完整编辑请在 DSL 模式下进行。
+
+---
+
 ## 运行
 
 要求：Python 3.8+（仅标准库）。使用 C++ 模式时需 `g++` 在 PATH 中
@@ -115,6 +155,7 @@ Windows 打包版：运行 `build.bat` 生成 `dist/对拍机.exe`（无控制�
 
 ```
 duipai.py        主程序（单文件，纯标准库）
+dsl.py           对拍输入 DSL：受限表达式求值器 + parse / serialize
 make_icon.py     生成应用图标 app.png / app.ico
 build.bat        Windows 打包脚本（PyInstaller --noconsole --onefile）
 build.sh         Linux / macOS 打包脚本
