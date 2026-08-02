@@ -1,0 +1,2226 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+竞赛对拍机（图形化对拍工具）
+
+功能：
+  1. 指定"正解代码"与"暴力代码"的运行命令；
+  2. 通过内置生成器（图形化配置变量）或外置生成器产生随机测试数据；
+  3. 数组的"长度来源"可引用前面变量的值作为长度（取整）；
+  4. 反复运行两份程序并比较输出，找出 WA / TLE / RE 的反例；
+  5. 失败时把测试数据与双方输出保存到 ./fail/ 目录供分析。
+  6. 内置生成器面板内提供"生成样例预览"区，预览不弹窗。
+
+纯标准库实现：tkinter / ttk / subprocess / threading / random / queue 等。
+跨平台：Linux / Windows / macOS。Windows 下可用 PyInstaller 打包为无控制台 exe
+（build.bat），且所有子进程都带 CREATE_NO_WINDOW，不会闪现终端窗口。
+
+线程安全说明：
+  对拍主循环在独立后台线程中运行，该线程只访问纯 Python 数据与 subprocess，
+  绝不直接调用任何 Tcl/Tk 接口；所有 UI 更新（日志、状态栏、结束处理）都通过
+  一个 queue.Queue 投递，由主线程的轮询回调（after 轮询）统一处理。
+"""
+
+import os
+import queue
+import random
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import json
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
+
+
+def format_float(v, precision):
+    """把浮点数 v 按指定小数位格式化，去掉多余的尾零与小数点，避免输出过长。"""
+    s = f"{v:.{precision}f}".rstrip("0").rstrip(".")
+    return s if s not in ("", "-0") else "0"
+
+
+class VariableRow:
+    """内置生成器中的一个变量条目（一行或多行 UI）。"""
+
+    KIND_NAMES = {"int": "整数", "float": "浮点数", "array": "数组",
+                  "perm": "排列", "tree": "树", "graph": "图"}
+
+    def __init__(self, parent, kind, app):
+        self.kind = kind          # 'int'/'float'/'array'/'perm'/'tree'/'graph'
+        self.app = app
+        self.frame = tk.Frame(parent, relief="ridge", bd=1)
+        self._build()
+
+    def _build_source(self, f, row, col, label, attr, refs_attr, entries,
+                      defaults):
+        """放置一个“随机范围/引用变量”来源控件组，返回下一个可用列号。"""
+        ttk.Label(f, text=label).grid(row=row, column=col, padx=(6, 0))
+        col += 1
+        var = tk.StringVar(value="随机范围")
+        setattr(self, attr + "_var", var)
+        cb = ttk.Combobox(f, textvariable=var, values=["随机范围"], width=14,
+                          state="readonly")
+        setattr(self, attr, cb)
+        setattr(self, refs_attr, [])          # [(显示文本, VariableRow), ...]
+        cb.grid(row=row, column=col, padx=2)
+        cb.bind("<<ComboboxSelected>>",
+                lambda e: self._apply_source_state(var, entries))
+        col += 1
+        for ename, dflt in zip(entries, defaults):
+            en = ttk.Entry(f, width=5)
+            en.insert(0, dflt)
+            setattr(self, ename, en)
+            en.grid(row=row, column=col, padx=2)
+            col += 1
+            if ename.endswith("_max"):
+                ttk.Label(f, text="~").grid(row=row, column=col, padx=2)
+                col += 1
+        return col
+
+    def _apply_source_state(self, var, entries):
+        """“随机范围”时启用对应输入框，引用变量时禁用。"""
+        state = "normal" if var.get() == "随机范围" else "disabled"
+        for name in entries:
+            getattr(self, name).configure(state=state)
+
+    def _set_sources(self, attr, refs_attr, entries, values, refs, current):
+        """刷新某个“来源”下拉的选项与引用列表。"""
+        setattr(self, refs_attr, refs)
+        getattr(self, attr).configure(values=values)
+        getattr(self, attr + "_var").set(current)
+        self._apply_source_state(getattr(self, attr + "_var"), entries)
+
+    def _ref_row(self, refs_attr, label):
+        """根据下拉选项文本找到对应的变量行对象。"""
+        for lbl, row in getattr(self, refs_attr):
+            if lbl == label:
+                return row
+        return None
+
+    def _build(self):
+        f = self.frame
+        if self.kind == "int":
+            ttk.Label(f, text="整数变量", width=10, style="Tag.TLabel").grid(row=0, column=0, padx=4)
+            ttk.Label(f, text="最小值:").grid(row=0, column=1, padx=(4, 0))
+            self.min_entry = ttk.Entry(f, width=8)
+            self.min_entry.insert(0, "1")
+            self.min_entry.grid(row=0, column=2, padx=2)
+            ttk.Label(f, text="最大值:").grid(row=0, column=3, padx=(6, 0))
+            self.max_entry = ttk.Entry(f, width=8)
+            self.max_entry.insert(0, "100")
+            self.max_entry.grid(row=0, column=4, padx=2)
+            btn_col, row_span = 5, 1
+        elif self.kind == "float":
+            ttk.Label(f, text="浮点数变量", width=10, style="Tag.TLabel").grid(row=0, column=0, padx=4)
+            ttk.Label(f, text="最小值:").grid(row=0, column=1, padx=(4, 0))
+            self.min_entry = ttk.Entry(f, width=8)
+            self.min_entry.insert(0, "0.0")
+            self.min_entry.grid(row=0, column=2, padx=2)
+            ttk.Label(f, text="最大值:").grid(row=0, column=3, padx=(6, 0))
+            self.max_entry = ttk.Entry(f, width=8)
+            self.max_entry.insert(0, "1.0")
+            self.max_entry.grid(row=0, column=4, padx=2)
+            btn_col, row_span = 5, 1
+        elif self.kind == "array":   # 两行：第1行元素配置，第2行行数/每行长度
+            ttk.Label(f, text="数组变量", width=10, style="Tag.TLabel").grid(
+                row=0, column=0, rowspan=2, padx=4, sticky="ns")
+            ttk.Label(f, text="元素:").grid(row=0, column=1, padx=(4, 0))
+            self.elem_type = ttk.Combobox(f, values=["整数", "浮点数"],
+                                          width=5, state="readonly")
+            self.elem_type.current(0)
+            self.elem_type.grid(row=0, column=2, padx=2)
+            self.elem_type.bind("<<ComboboxSelected>>", self._toggle_elem_type)
+            ttk.Label(f, text="范围:").grid(row=0, column=3, padx=(6, 0))
+            self.el_min = ttk.Entry(f, width=6)
+            self.el_min.insert(0, "1")
+            self.el_min.grid(row=0, column=4, padx=2)
+            ttk.Label(f, text="~").grid(row=0, column=5)
+            self.el_max = ttk.Entry(f, width=6)
+            self.el_max.insert(0, "100")
+            self.el_max.grid(row=0, column=6, padx=2)
+            self.prec_label = ttk.Label(f, text="精度:")
+            self.prec_entry = ttk.Entry(f, width=3)
+            self.prec_entry.insert(0, "6")
+            self.prec_label.grid(row=0, column=7, padx=(6, 0))
+            self.prec_entry.grid(row=0, column=8, padx=2)
+
+            col = self._build_source(f, 1, 1, "行数:", "rows_source",
+                                     "_rows_refs", ["rows_min", "rows_max"],
+                                     ["1", "1"])
+            col = self._build_source(f, 1, col, "每行长度:", "len_source",
+                                     "_len_refs", ["len_min", "len_max"],
+                                     ["1", "10"])
+            self._toggle_elem_type()
+            btn_col, row_span = col, 2
+        elif self.kind == "perm":
+            ttk.Label(f, text="排列变量", width=10, style="Tag.TLabel").grid(
+                row=0, column=0, padx=4)
+            col = self._build_source(f, 0, 1, "长度n:", "n_source",
+                                     "_n_refs", ["n_min", "n_max"],
+                                     ["1", "10"])
+            btn_col, row_span = col, 1
+        elif self.kind == "tree":
+            ttk.Label(f, text="树变量", width=10, style="Tag.TLabel").grid(
+                row=0, column=0, rowspan=2, padx=4, sticky="ns")
+            col = self._build_source(f, 0, 1, "顶点数n:", "n_source",
+                                     "_n_refs", ["n_min", "n_max"],
+                                     ["2", "8"])
+            # 第2行：边权
+            ttk.Label(f, text="边权:").grid(row=1, column=1, padx=(6, 0))
+            self.w_mode_var = tk.StringVar(value="无")
+            self.w_mode = ttk.Combobox(f, textvariable=self.w_mode_var,
+                                       values=["无", "整数", "浮点"], width=5,
+                                       state="readonly")
+            self.w_mode.grid(row=1, column=2, padx=2)
+            self.w_mode.bind("<<ComboboxSelected>>", self._toggle_w_mode)
+            self.w_range_label = ttk.Label(f, text="范围:")
+            self.w_range_label.grid(row=1, column=3, padx=(6, 0))
+            self.w_min = ttk.Entry(f, width=6)
+            self.w_min.insert(0, "1")
+            self.w_min.grid(row=1, column=4, padx=2)
+            self.w_tilde = ttk.Label(f, text="~")
+            self.w_tilde.grid(row=1, column=5)
+            self.w_max = ttk.Entry(f, width=6)
+            self.w_max.insert(0, "10")
+            self.w_max.grid(row=1, column=6, padx=2)
+            self.w_prec_label = ttk.Label(f, text="精度:")
+            self.w_prec = ttk.Entry(f, width=3)
+            self.w_prec.insert(0, "6")
+            self.w_prec_label.grid(row=1, column=7, padx=(6, 0))
+            self.w_prec.grid(row=1, column=8, padx=2)
+            self._toggle_w_mode()
+            btn_col, row_span = 9, 2
+        elif self.kind == "graph":
+            ttk.Label(f, text="图变量", width=10, style="Tag.TLabel").grid(
+                row=0, column=0, rowspan=2, padx=4, sticky="ns")
+            col = self._build_source(f, 0, 1, "顶点数n:", "n_source",
+                                     "_n_refs", ["n_min", "n_max"],
+                                     ["2", "6"])
+            col = self._build_source(f, 0, col, "边数m:", "m_source",
+                                     "_m_refs", ["m_min", "m_max"],
+                                     ["2", "6"])
+            # 第2行：类型 / 连通 / 边权
+            ttk.Label(f, text="类型:").grid(row=1, column=1, padx=(6, 0))
+            self.g_dir_var = tk.StringVar(value="无向")
+            g_dir = ttk.Combobox(f, textvariable=self.g_dir_var,
+                                 values=["无向", "有向"], width=5,
+                                 state="readonly")
+            g_dir.grid(row=1, column=2, padx=2)
+            ttk.Label(f, text="连通:").grid(row=1, column=3, padx=(6, 0))
+            self.g_conn_var = tk.StringVar(value="任意")
+            g_conn = ttk.Combobox(f, textvariable=self.g_conn_var,
+                                  values=["任意", "连通"], width=5,
+                                  state="readonly")
+            g_conn.grid(row=1, column=4, padx=2)
+            ttk.Label(f, text="边权:").grid(row=1, column=5, padx=(6, 0))
+            self.w_mode_var = tk.StringVar(value="无")
+            self.w_mode = ttk.Combobox(f, textvariable=self.w_mode_var,
+                                       values=["无", "整数", "浮点"], width=5,
+                                       state="readonly")
+            self.w_mode.grid(row=1, column=6, padx=2)
+            self.w_mode.bind("<<ComboboxSelected>>", self._toggle_w_mode)
+            self.w_range_label = ttk.Label(f, text="范围:")
+            self.w_range_label.grid(row=1, column=7, padx=(6, 0))
+            self.w_min = ttk.Entry(f, width=6)
+            self.w_min.insert(0, "1")
+            self.w_min.grid(row=1, column=8, padx=2)
+            self.w_tilde = ttk.Label(f, text="~")
+            self.w_tilde.grid(row=1, column=9)
+            self.w_max = ttk.Entry(f, width=6)
+            self.w_max.insert(0, "10")
+            self.w_max.grid(row=1, column=10, padx=2)
+            self.w_prec_label = ttk.Label(f, text="精度:")
+            self.w_prec = ttk.Entry(f, width=3)
+            self.w_prec.insert(0, "6")
+            self.w_prec_label.grid(row=1, column=11, padx=(6, 0))
+            self.w_prec.grid(row=1, column=12, padx=2)
+            self._toggle_w_mode()
+            btn_col, row_span = 13, 2
+
+        # 右侧按钮：上移 / 下移 / 删除
+        ttk.Button(f, text="▲", width=3,
+                   command=lambda: self.app.move_row(self, -1)).grid(
+            row=0, column=btn_col, rowspan=row_span, padx=(8, 2), sticky="ns")
+        ttk.Button(f, text="▼", width=3,
+                   command=lambda: self.app.move_row(self, 1)).grid(
+            row=0, column=btn_col + 1, rowspan=row_span, padx=2, sticky="ns")
+        ttk.Button(f, text="✕", width=3,
+                   command=lambda: self.app.delete_row(self)).grid(
+            row=0, column=btn_col + 2, rowspan=row_span, padx=2, sticky="ns")
+
+    def _toggle_elem_type(self, event=None):
+        """根据数组元素类型，显示或隐藏精度输入框。"""
+        is_float = self.elem_type.get() == "浮点数"
+        if is_float:
+            self.prec_label.grid()
+            self.prec_entry.grid()
+        else:
+            self.prec_label.grid_remove()
+            self.prec_entry.grid_remove()
+
+    def _toggle_w_mode(self, event=None):
+        """根据边权模式显示/隐藏权重范围与精度输入框。"""
+        mode = self.w_mode_var.get()
+        if mode == "无":
+            self.w_range_label.grid_remove()
+            self.w_min.grid_remove()
+            self.w_tilde.grid_remove()
+            self.w_max.grid_remove()
+            self.w_prec_label.grid_remove()
+            self.w_prec.grid_remove()
+        else:
+            self.w_range_label.grid()
+            self.w_min.grid()
+            self.w_tilde.grid()
+            self.w_max.grid()
+            if mode == "浮点":
+                self.w_prec_label.grid()
+                self.w_prec.grid()
+            else:
+                self.w_prec_label.grid_remove()
+                self.w_prec.grid_remove()
+
+
+class Application(tk.Tk):
+    """主窗口：负责 UI 构建与对拍核心逻辑。"""
+
+    def __init__(self):
+        super().__init__()
+        self.title("竞赛对拍机")
+        self.geometry("1024x780")
+        self.minsize(820, 600)
+
+        self.rows = []                 # 内置生成器的变量条目列表
+        self.worker = None             # 对拍后台线程
+        self.running = False           # 是否正在对拍
+        self._trying = False           # 是否有试运行在进行
+        self.stop_event = threading.Event()
+        self.msg_queue = queue.Queue() # 后台线程 → 主线程的消息队列
+        self.stats = None
+        self.tested = 0
+        self.finish_reason = ""
+        self._sections = {}            # 各可折叠区块：key -> 状态字典
+
+        self._setup_vars()
+        self._setup_style()
+        self._initial_collapsed = self._load_state()
+        self._build_ui()
+        self._apply_collapsed_state()
+        self._build_menu()
+        try:
+            self.iconphoto(True, self._make_icon())
+        except tk.TclError:
+            pass
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # 整窗滚轮（在自滚动区域之外滚动整个界面）
+        self.bind_all("<MouseWheel>", self._on_window_wheel)
+        self.bind_all("<Button-4>", self._on_window_wheel)
+        self.bind_all("<Button-5>", self._on_window_wheel)
+
+        # 启动主线程的队列轮询，处理后台线程投递的 UI 更新
+        self._poll_id = None
+        self._poll_id = self.after(100, self._poll_queue)
+
+    # ------------------------------------------------------------------ #
+    # UI 构建
+    # ------------------------------------------------------------------ #
+    def _setup_vars(self):
+        """初始化所有 tk 变量。"""
+        self.sol_cmd = tk.StringVar()
+        self.brute_cmd = tk.StringVar()
+        self.sol_mode = tk.StringVar(value="运行命令")   # 运行命令 / C++ 源码
+        self.brute_mode = tk.StringVar(value="运行命令")
+        self.compiler = tk.StringVar(value="g++")
+        self.compile_flags = tk.StringVar(value="-O2 -std=c++17")
+        self.gen_mode = tk.StringVar(value="builtin")   # builtin / external
+        self.ext_gen_cmd = tk.StringVar()
+        self.ext_gen_mode = tk.StringVar(value="运行命令")
+        self.rounds = tk.StringVar(value="10000")
+        self.timeout = tk.StringVar(value="5")
+        self.seed = tk.StringVar()
+        self.ignore_ws = tk.BooleanVar(value=False)
+        self.status_var = tk.StringVar(value="已测试：0")
+
+        # 各程序所在目录（浏览文件时自动记录，用于解析相对路径）
+        cwd = os.getcwd()
+        self.sol_dir = cwd
+        self.brute_dir = cwd
+        self.extgen_dir = cwd
+
+    @staticmethod
+    def _base_font():
+        """根据平台返回基础中文字体。"""
+        if sys.platform == "darwin":
+            return ("PingFang SC", 13)
+        if os.name == "nt":
+            return ("Microsoft YaHei UI", 10)
+        return ("Noto Sans CJK SC", 10)
+
+    @classmethod
+    def _bold_font(cls):
+        fam, size = cls._base_font()
+        return (fam, size, "bold")
+
+    def _setup_style(self):
+        """朴素风格：自适应原生主题 + 浅色界面 + 默认控件外观。"""
+        style = ttk.Style(self)
+        avail = set(style.theme_names())
+        if sys.platform == "darwin":
+            theme = "aqua" if "aqua" in avail else ("clam" if "clam" in avail else "default")
+        elif os.name == "nt":
+            theme = "vista" if "vista" in avail else ("clam" if "clam" in avail else "default")
+        else:
+            theme = "clam" if "clam" in avail else "default"
+        try:
+            style.theme_use(theme)
+        except tk.TclError:
+            pass
+
+        # 朴素调色板
+        self.accent = "#2f6fed"      # 蓝色强调
+        self.black = "#111111"
+        self.panel_bg = "#f4f6fa"    # 浅灰蓝底
+        self.status_bg = "#2b3440"
+        self.status_fg = "#ffffff"
+        self.text_bg = "#ffffff"
+        self.text_fg = "#222222"
+
+        try:
+            style.configure(".", font=self._base_font())
+        except tk.TclError:
+            pass
+        style.configure("TLabelframe.Label", foreground=self.accent,
+                        font=self._bold_font())
+        style.configure("TButton", padding=(10, 4))
+        style.configure("Tag.TLabel", foreground=self.accent,
+                        font=self._bold_font())
+        style.configure("Hint.TLabel", foreground="#6b6b6b")
+        try:
+            self.configure(bg=self.panel_bg)
+            style.configure("TFrame", background=self.panel_bg)
+            style.configure("TLabelframe", background=self.panel_bg)
+        except tk.TclError:
+            pass
+
+    def _build_menu(self):
+        """顶部菜单栏（文件 / 帮助）。"""
+        menubar = tk.Menu(self)
+        fm = tk.Menu(menubar, tearoff=0)
+        fm.add_command(label="退出", command=self._on_close)
+        menubar.add_cascade(label="文件", menu=fm)
+        hm = tk.Menu(menubar, tearoff=0)
+        hm.add_command(label="使用说明", command=self._show_help)
+        hm.add_command(label="关于", command=self._show_about)
+        menubar.add_cascade(label="帮助", menu=hm)
+        self.config(menu=menubar)
+
+    def _show_help(self):
+        """显示使用说明。"""
+        messagebox.showinfo(
+            "使用说明",
+            "1. 正解/暴力：可填“运行命令”（如 python3 ./sol.py、./sol）\n"
+            "   或选“C++ 源码”填 .cpp 路径——开始对拍时会自动用 g++ 编译。\n"
+            "2. 点“试运行”可按当前生成器生成一份样例并运行对应程序，\n"
+            "   结果显示在“试运行输出”区，便于正式对拍前验证。\n"
+            "3. 生成器：内置可添加 整数/浮点/数组/排列/树/图 变量；\n"
+            "   数组行数、树/图 n、m 等都可引用前面变量的值（取整）。\n"
+            "4. 设置组数（-1 无限）、超时、随机种子后点击“开始对拍”。\n"
+            "5. 发现不一致(WA)时，测试数据与双方输出会保存到 ./fail/ 目录。")
+
+    def _show_about(self):
+        """显示关于信息。"""
+        messagebox.showinfo("关于", "竞赛对拍机\n"
+                                    "基于 tkinter 的图形化对拍工具\n"
+                                    "纯标准库实现，跨平台（Linux / Windows / macOS）。")
+
+    def _px_rounded_rect(self, img, x0, y0, x1, y1, r, color):
+        """在 PhotoImage 上绘制一个填充的圆角矩形（像素级）。"""
+        for y in range(y0, y1 + 1):
+            for x in range(x0, x1 + 1):
+                dx = max(x0 + r - x, 0, x - (x1 - r))
+                dy = max(y0 + r - y, 0, y - (y1 - r))
+                if dx * dx + dy * dy <= r * r:
+                    img.put(color, (x, y))
+
+    def _make_icon(self):
+        """程序化绘制一个 32x32 应用图标（对拍/对比含义），零外部文件。"""
+        size = 32
+        img = tk.PhotoImage(width=size, height=size)
+        bg = "#dfe6f0"
+        for y in range(size):
+            for x in range(size):
+                img.put(bg, (x, y))
+        # 外圈圆角徽标
+        self._px_rounded_rect(img, 2, 2, 29, 29, 7, self.accent)
+        self._px_rounded_rect(img, 5, 5, 26, 26, 5, bg)
+        # 左绿右红两个对比面板
+        self._px_rounded_rect(img, 7, 9, 14, 23, 3, "#3eb489")
+        self._px_rounded_rect(img, 17, 9, 24, 23, 3, "#e05561")
+        # 中间白色分隔
+        for y in range(10, 23):
+            img.put("#ffffff", (15, y))
+            img.put("#ffffff", (16, y))
+        return img
+
+    def _build_ui(self):
+        outer = ttk.Frame(self)
+        outer.pack(fill="both", expand=True)
+
+        # 整窗滚动区：所有功能区块放进外层 Canvas，右侧带纵向滚动条
+        wrap = ttk.Frame(outer)
+        wrap.pack(fill="both", expand=True)
+        wrap.rowconfigure(0, weight=1)
+        wrap.columnconfigure(0, weight=1)
+
+        self.body_canvas = tk.Canvas(wrap, highlightthickness=0,
+                                     yscrollincrement=1)
+        self.body_vbar = ttk.Scrollbar(wrap, orient="vertical",
+                                       command=self.body_canvas.yview)
+        self.body_canvas.configure(yscrollcommand=self.body_vbar.set)
+        self.body_inner = ttk.Frame(self.body_canvas, padding=8)
+        self.body_inner_window = self.body_canvas.create_window(
+            (0, 0), window=self.body_inner, anchor="nw")
+        self.body_canvas.grid(row=0, column=0, sticky="nsew")
+        self.body_vbar.grid(row=0, column=1, sticky="ns")
+
+        self.body_inner.bind("<Configure>", self._on_body_inner_configure)
+        self.body_canvas.bind("<Configure>", self._on_body_canvas_configure)
+
+        self._build_program_section(self.body_inner)
+        self._build_source_section(self.body_inner)
+        self._build_generator_section(self.body_inner)
+        self._build_param_section(self.body_inner)
+        self._build_control_section(self.body_inner)
+
+        # 底部状态栏固定在窗口底部
+        self.status_label = tk.Label(outer, textvariable=self.status_var,
+                                     bg=self.status_bg, fg=self.status_fg,
+                                     anchor="w", padx=10, pady=5)
+        self.status_label.pack(fill="x", pady=(6, 0))
+
+        # “自滚动区域”：整页滚轮在这些区域内不接管（交给各自滚动）
+        self._scroll_regions = [self.var_canvas, self.log_text,
+                                self.preview_text, self.tryout_text,
+                                self.src_text]
+
+    def _on_body_inner_configure(self, event):
+        """内容尺寸变化时更新滚动区域并自适应高度。"""
+        self.body_canvas.configure(scrollregion=self.body_canvas.bbox("all"))
+        self._fit_body_height()
+
+    def _on_body_canvas_configure(self, event):
+        """窗口变化时让内容宽度贴合画布宽度并自适应高度。"""
+        self.body_canvas.itemconfigure(self.body_inner_window,
+                                       width=event.width)
+        self._fit_body_height()
+
+    def _fit_body_height(self):
+        """内容高度超过窗口时显示滚动条并滚动；否则撑满窗口并隐藏滚动条。"""
+        canvas_h = self.body_canvas.winfo_height()
+        req_h = self.body_inner.winfo_reqheight()
+        h = max(canvas_h, req_h)
+        try:
+            cur = int(self.body_canvas.itemcget(self.body_inner_window, "height"))
+        except (TypeError, ValueError):
+            cur = 0
+        if cur != h:
+            self.body_canvas.itemconfigure(self.body_inner_window, height=h)
+        needs = req_h > canvas_h
+        if needs and self.body_vbar.winfo_manager() == "":
+            self.body_vbar.grid(row=0, column=1, sticky="ns")
+        elif not needs and self.body_vbar.winfo_manager() == "grid":
+            self.body_vbar.grid_remove()
+
+    def _section(self, parent, title, accent="red", expand=False):
+        """朴素区块：浅色标题栏 + 白底细边框 body；点击标题可折叠/展开。"""
+        outer = ttk.Frame(parent)
+        outer.pack(fill="both" if expand else "x", expand=expand, pady=(0, 6))
+        head = tk.Frame(outer, bg=self.panel_bg, height=30, cursor="hand2",
+                        highlightthickness=1, highlightbackground="#c7ccd4")
+        head.pack(fill="x")
+        head.pack_propagate(False)
+        fam = self._base_font()[0]
+        tk.Label(head, bg=self.panel_bg, fg="#222222", font=(fam, 12, "bold"),
+                 text=title, cursor="hand2").pack(side="left", padx=10)
+        arrow = tk.Label(head, bg=self.panel_bg, fg="#555555",
+                         font=(fam, 11, "bold"), text="−", width=3,
+                         cursor="hand2")
+        arrow.pack(side="right", padx=(0, 8))
+        body = tk.Frame(outer, bg=self.text_bg, bd=1, relief="solid")
+        body.pack(fill="both" if expand else "x", expand=expand)
+        inner = tk.Frame(body, bg=self.text_bg)
+        inner.pack(fill="both", expand=True, padx=8, pady=8)
+        # 记录区块并支持点击标题栏折叠/展开
+        self._sections[title] = {"head": head, "body": body, "inner": inner,
+                                 "expand": expand, "arrow": arrow,
+                                 "collapsed": False}
+        for w in [head] + list(head.winfo_children()):
+            w.bind("<Button-1>", lambda e, k=title: self._toggle_section(k))
+        return inner
+
+    def _toggle_section(self, key):
+        """折叠/展开一个区块，并更新箭头。"""
+        sec = self._sections.get(key)
+        if sec is None:
+            return
+        sec["collapsed"] = not sec["collapsed"]
+        if sec["collapsed"]:
+            sec["body"].pack_forget()
+            sec["arrow"].configure(text="+")
+        else:
+            sec["body"].pack(fill="both" if sec["expand"] else "x",
+                             expand=sec["expand"])
+            sec["arrow"].configure(text="−")
+
+    def _apply_collapsed_state(self):
+        """应用上次会话保存的折叠状态。"""
+        for key, collapsed in self._initial_collapsed.items():
+            sec = self._sections.get(key)
+            if sec is None or not collapsed:
+                continue
+            sec["collapsed"] = True
+            sec["body"].pack_forget()
+            sec["arrow"].configure(text="+")
+
+    @staticmethod
+    def _state_path():
+        """状态文件路径：程序（或 exe）所在目录下。"""
+        base = os.path.dirname(os.path.abspath(sys.argv[0]))
+        return os.path.join(base, "duipai_state.json")
+
+    def _load_state(self):
+        """读取状态文件，返回折叠的区块集合。"""
+        collapsed = {}
+        try:
+            with open(self._state_path(), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            sections = data.get("sections", {})
+            for key, val in sections.items():
+                if isinstance(val, bool) and val:
+                    collapsed[key] = True
+        except Exception:
+            pass
+        return collapsed
+
+    def _save_state(self):
+        """把各区块折叠状态写入状态文件。"""
+        try:
+            sections = {k: bool(v["collapsed"])
+                        for k, v in self._sections.items()}
+            with open(self._state_path(), "w", encoding="utf-8") as fh:
+                json.dump({"sections": sections}, fh, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _build_program_section(self, parent):
+        box = self._section(parent, "程序路径", "red")
+        box.columnconfigure(2, weight=1)
+
+        def prog_row(row, label_var, cmd_var, mode_var, tag, try_label):
+            ttk.Label(box, text=label_var).grid(row=row, column=0,
+                                                sticky="w", padx=(0, 4))
+            ttk.Combobox(box, textvariable=mode_var,
+                         values=["运行命令", "C++ 源码"], width=8,
+                         state="readonly").grid(row=row, column=1,
+                                                sticky="w", padx=(0, 4),
+                                                pady=(4 if row else 0))
+            ttk.Entry(box, textvariable=cmd_var).grid(
+                row=row, column=2, sticky="ew", padx=2, pady=(4 if row else 0))
+            ttk.Button(box, text="浏览", style="Blue.TButton",
+                       command=lambda: self._browse(cmd_var, tag)).grid(
+                row=row, column=3, padx=(4, 2), pady=(4 if row else 0))
+            ttk.Button(box, text=try_label, width=6, style="Blue.TButton",
+                       command=lambda t=tag: self._tryout(t)).grid(
+                row=row, column=4, padx=(2, 0), pady=(4 if row else 0))
+            ttk.Button(box, text="源码", width=5, style="Blue.TButton",
+                       command=lambda t=tag: self._view_source(t)).grid(
+                row=row, column=5, padx=(2, 0), pady=(4 if row else 0))
+
+        prog_row(0, "正解代码：", self.sol_cmd, self.sol_mode, "sol", "试运行")
+        prog_row(1, "暴力代码：", self.brute_cmd, self.brute_mode, "brute", "试运行")
+
+        # 编译设置（C++ 源码模式使用）
+        comp = ttk.Frame(box)
+        comp.grid(row=2, column=0, columnspan=6, sticky="w", pady=(6, 0))
+        ttk.Label(comp, text="编译设置:").pack(side="left")
+        ttk.Entry(comp, textvariable=self.compiler, width=10).pack(
+            side="left", padx=(4, 8))
+        ttk.Label(comp, text="编译参数:").pack(side="left")
+        ttk.Entry(comp, textvariable=self.compile_flags, width=22).pack(
+            side="left", padx=(4, 8))
+        ttk.Label(comp, text="（仅 C++ 源码模式使用）", style="Hint.TLabel").pack(
+            side="left")
+
+        ttk.Label(box, text="示例：运行命令填 python3 ./sol.py 或 ./sol；"
+                            "C++ 源码模式填 .cpp 路径，开始对拍时自动编译后运行。"
+                 ).grid(row=3, column=0, columnspan=6, sticky="w",
+                        padx=(0, 4), pady=(4, 0))
+
+    def _build_source_section(self, parent):
+        """内嵌源码查看区：查看传入的正解/暴力/外置生成器源码。"""
+        box = self._section(parent, "源码查看", "blue")
+        head = ttk.Frame(box)
+        head.pack(fill="x")
+        ttk.Label(head, text="查看程序：").pack(side="left")
+        self.src_pick = ttk.Combobox(head, values=["正解", "暴力", "外置生成器"],
+                                     width=10, state="readonly")
+        self.src_pick.current(0)
+        self.src_pick.pack(side="left", padx=(4, 0))
+        self.src_pick.bind("<<ComboboxSelected>>", self._on_src_pick)
+        ttk.Label(head, text="（也可点击程序行旁的“源码”按钮直接载入）",
+                  style="Hint.TLabel").pack(side="left", padx=(8, 0))
+
+        body = ttk.Frame(box)
+        body.pack(fill="x", pady=(4, 0))
+        mono = ("Menlo", 10) if sys.platform == "darwin" else ("Consolas", 9)
+        self.src_gutter = tk.Text(body, width=4, bg="#ececec", fg="#888888",
+                                  font=mono, state="disabled", wrap="none",
+                                  padx=3, insertofftime=0, relief="flat",
+                                  takefocus=0)
+        self.src_text = tk.Text(body, height=9, wrap="none", font=mono,
+                                bg=self.text_bg, fg=self.text_fg,
+                                selectbackground=self.accent,
+                                relief="solid", bd=1, state="disabled",
+                                insertofftime=0, padx=6, pady=4)
+        vbar = ttk.Scrollbar(body, orient="vertical",
+                             command=self.src_text.yview)
+        self.src_gutter.pack(side="left", fill="y")
+        self.src_text.pack(side="left", fill="both", expand=True)
+        vbar.pack(side="left", fill="y")
+
+        def _sync_scroll(*args):
+            vbar.set(*args)
+            self.src_text.yview_moveto(args[0])
+            self.src_gutter.yview_moveto(args[0])
+
+        self.src_text.configure(yscrollcommand=_sync_scroll)
+        self.src_gutter.configure(yscrollcommand=_sync_scroll)
+
+    def _on_src_pick(self, event=None):
+        """下拉切换程序时载入对应源码。"""
+        tag_map = {"正解": "sol", "暴力": "brute", "外置生成器": "ext"}
+        self._view_source(tag_map.get(self.src_pick.get(), "sol"))
+
+    def _view_source(self, tag):
+        """载入对应程序的源码到源码查看区。"""
+        tag_map = {"sol": "正解", "brute": "暴力", "ext": "外置生成器"}
+        self.src_pick.set(tag_map.get(tag, "正解"))
+        if tag == "sol":
+            var, mode_var, d = self.sol_cmd, self.sol_mode, self.sol_dir
+        elif tag == "brute":
+            var, mode_var, d = self.brute_cmd, self.brute_mode, self.brute_dir
+        elif tag == "ext":
+            var, mode_var, d = self.ext_gen_cmd, self.ext_gen_mode, self.extgen_dir
+        else:
+            return
+        raw = var.get().strip()
+        path = ""
+        if mode_var.get() == "C++ 源码":
+            tokens = self._parse_command(raw)
+            path = tokens[0] if tokens else ""
+        else:
+            # 运行命令：尝试把某个 token 当作文件
+            tokens = self._parse_command(raw)
+            for tok in tokens:
+                p = tok if os.path.isabs(tok) else os.path.normpath(os.path.join(d, tok))
+                if os.path.isfile(p):
+                    path = p
+                    break
+        if path and not os.path.isabs(path):
+            path = os.path.normpath(os.path.join(d, path))
+        if not path:
+            self._set_source("未解析到源码文件：请切换到“C++ 源码”模式，"
+                             "或直接浏览源码文件。\n")
+            return
+        if not os.path.isfile(path):
+            self._set_source(f"找不到文件：{path}\n")
+            return
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            self._set_source(f"读取文件失败：{e}\n")
+            return
+        if b"\x00" in data[:4096]:
+            self._set_source("该文件为二进制文件，无法作为源码显示。\n")
+            return
+        text = data.decode("utf-8", "replace")
+        # 统一行尾，避免 CRLF 与 Tk 换行规则不一致导致行号错位
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        if text.startswith("\ufeff"):
+            text = text[1:]
+        self._set_source(text, path)
+
+    def _set_source(self, text, path=""):
+        """把源码文本与行号写入源码查看区。"""
+        lines = text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        self.src_text.configure(state="normal")
+        self.src_text.delete("1.0", "end")
+        self.src_text.insert("1.0", text)
+        self.src_text.configure(state="disabled")
+        self.src_gutter.configure(state="normal")
+        self.src_gutter.delete("1.0", "end")
+        self.src_gutter.insert("1.0", "\n".join(map(str, range(1, len(lines) + 1))))
+        self.src_gutter.configure(state="disabled")
+        self.src_text.yview_moveto(0)
+        self.src_gutter.yview_moveto(0)
+
+    def _build_generator_section(self, parent):
+        box = self._section(parent, "数据生成器", "blue", expand=True)
+
+        # 生成器模式选择
+        mode = ttk.Frame(box)
+        mode.pack(fill="x")
+        ttk.Radiobutton(mode, text="内置生成器", value="builtin",
+                        variable=self.gen_mode,
+                        command=self._switch_gen_mode).pack(side="left")
+        ttk.Radiobutton(mode, text="外置生成器", value="external",
+                        variable=self.gen_mode,
+                        command=self._switch_gen_mode).pack(side="left", padx=(14, 0))
+
+        # 面板容器：两个面板重叠放置，用 grid_remove 切换
+        holder = ttk.Frame(box)
+        holder.pack(fill="both", expand=True, pady=(6, 0))
+        holder.rowconfigure(0, weight=1)
+        holder.columnconfigure(0, weight=1)
+        self.ext_panel = ttk.Frame(holder)
+        self.builtin_panel = ttk.Frame(holder)
+        self.ext_panel.grid(row=0, column=0, sticky="nsew")
+        self.builtin_panel.grid(row=0, column=0, sticky="nsew")
+
+        self._build_external_panel()
+        self._build_builtin_panel()
+        self._switch_gen_mode()
+
+    def _build_external_panel(self):
+        box = self.ext_panel
+        ttk.Label(box, text="接入一个生成程序：每次对拍都会运行该程序，"
+                            "其标准输出将作为测试数据写入 test.in。",
+                  style="Hint.TLabel").pack(fill="x", pady=(0, 4))
+        row = ttk.Frame(box)
+        row.pack(fill="x")
+        row.columnconfigure(2, weight=1)
+        ttk.Label(row, text="生成程序：").grid(row=0, column=0,
+                                               sticky="w", padx=(0, 4))
+        ttk.Combobox(row, textvariable=self.ext_gen_mode,
+                     values=["运行命令", "C++ 源码"], width=8,
+                     state="readonly").grid(row=0, column=1, padx=(0, 4))
+        ttk.Entry(row, textvariable=self.ext_gen_cmd).grid(
+            row=0, column=2, sticky="ew")
+        ttk.Button(row, text="浏览", style="Blue.TButton",
+                   command=lambda: self._browse(self.ext_gen_cmd, "ext")).grid(
+            row=0, column=3, padx=(4, 0))
+        ttk.Button(row, text="源码", width=5, style="Blue.TButton",
+                   command=lambda: self._view_source("ext")).grid(
+            row=0, column=4, padx=(4, 0))
+        ttk.Label(box,
+                  text="说明：种子将作为 --seed 参数传递（仅当填写了随机种子时）；"
+                       "C++ 源码模式会在开始对拍时自动编译；"
+                       "可点击“预览生成示例”实际运行一次查看输出。",
+                  style="Hint.TLabel").pack(fill="x", padx=(0, 4), pady=(4, 0))
+
+    def _build_builtin_panel(self):
+        box = self.builtin_panel
+        top = ttk.Frame(box)
+        top.pack(fill="x")
+        ttk.Button(top, text="+ 整数变量", style="Blue.TButton",
+                   command=lambda: self._add_var("int")).pack(side="left", padx=(0, 4))
+        ttk.Button(top, text="+ 浮点数变量", style="Blue.TButton",
+                   command=lambda: self._add_var("float")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 数组变量", style="Blue.TButton",
+                   command=lambda: self._add_var("array")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 排列变量", style="Blue.TButton",
+                   command=lambda: self._add_var("perm")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 树变量", style="Blue.TButton",
+                   command=lambda: self._add_var("tree")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 图变量", style="Blue.TButton",
+                   command=lambda: self._add_var("graph")).pack(side="left", padx=4)
+
+        # 可滚动的变量列表（Canvas + Scrollbar）
+        scroll_holder = ttk.Frame(box)
+        scroll_holder.pack(fill="both", expand=True, pady=(6, 0))
+        scroll_holder.rowconfigure(0, weight=1)
+        scroll_holder.columnconfigure(0, weight=1)
+
+        self.var_canvas = tk.Canvas(scroll_holder, highlightthickness=0,
+                                    height=140, yscrollincrement=1)
+        vbar = ttk.Scrollbar(scroll_holder, orient="vertical",
+                             command=self.var_canvas.yview)
+        hbar = ttk.Scrollbar(scroll_holder, orient="horizontal",
+                             command=self.var_canvas.xview)
+        self.var_canvas.configure(yscrollcommand=vbar.set,
+                                  xscrollcommand=hbar.set)
+
+        self.var_inner = ttk.Frame(self.var_canvas)
+        self.var_inner_window = self.var_canvas.create_window(
+            (0, 0), window=self.var_inner, anchor="nw")
+
+        # 滚轮绑定到画布及其内容，保证列表内任意位置都可滚动
+        self._bind_scroll_recursive(self.var_canvas)
+
+        self.var_canvas.grid(row=0, column=0, sticky="nsew")
+        vbar.grid(row=0, column=1, sticky="ns")
+        hbar.grid(row=1, column=0, sticky="ew")
+
+        # 内容尺寸变化时刷新滚动区域；窗口尺寸变化时让内容宽度自适应
+        self.var_inner.bind(
+            "<Configure>",
+            lambda e: self.var_canvas.configure(scrollregion=self.var_canvas.bbox("all")))
+        self.var_canvas.bind(
+            "<Configure>",
+            lambda e: self.var_canvas.itemconfigure(self.var_inner_window, width=e.width))
+
+        ttk.Label(box,
+                  text="提示：变量从上到下每行各生成一行数据；数组的“长度来源”可引用前面变量的值作为长度。").pack(
+            fill="x", padx=(0, 4), pady=(4, 0))
+
+        # 生成样例预览区（只读，点击“预览生成示例”生成，不再弹窗）
+        prev_head = ttk.Frame(box)
+        prev_head.pack(fill="x", pady=(6, 0))
+        ttk.Label(prev_head, text="生成样例预览").pack(side="left")
+        ttk.Button(prev_head, text="预览生成示例", style="Blue.TButton",
+                   command=self._preview).pack(side="right")
+        mono = ("Menlo", 10) if sys.platform == "darwin" else ("Consolas", 9)
+        self.preview_text = tk.Text(box, height=5, wrap="char", font=mono,
+                                    bg=self.text_bg, fg=self.text_fg,
+                                    relief="solid", bd=1, padx=6, pady=4,
+                                    state="disabled", insertofftime=0)
+        self.preview_text.pack(fill="x", pady=(4, 0))
+
+    def _build_param_section(self, parent):
+        box = self._section(parent, "对拍参数", "red")
+        box.columnconfigure(1, weight=1)
+
+        ttk.Label(box, text="对拍组数：").grid(row=0, column=0,
+                                              sticky="w", padx=(0, 4), pady=2)
+        ttk.Entry(box, textvariable=self.rounds, width=10).grid(
+            row=0, column=1, sticky="w", pady=2)
+        ttk.Label(box, text="-1 表示无限").grid(row=0, column=2,
+                                               sticky="w", padx=(6, 0))
+
+        ttk.Label(box, text="超时时间（秒）：").grid(row=1, column=0,
+                                                  sticky="w", padx=(0, 4), pady=2)
+        ttk.Entry(box, textvariable=self.timeout, width=10).grid(
+            row=1, column=1, sticky="w", pady=2)
+
+        ttk.Label(box, text="随机种子：").grid(row=2, column=0,
+                                              sticky="w", padx=(0, 4), pady=2)
+        ttk.Entry(box, textvariable=self.seed, width=10).grid(
+            row=2, column=1, sticky="w", pady=2)
+        ttk.Label(box, text="留空则使用系统时间随机").grid(row=2, column=2,
+                                                       sticky="w", padx=(6, 0))
+
+        ttk.Checkbutton(box, text="忽略行末空格（同时忽略末尾连续空行）",
+                        variable=self.ignore_ws).grid(
+            row=3, column=0, columnspan=3, sticky="w", padx=(0, 4), pady=2)
+
+    def _build_control_section(self, parent):
+        box = self._section(parent, "控制与日志", "red", expand=True)
+
+        btns = ttk.Frame(box)
+        btns.pack(fill="x")
+        self.btn_start = ttk.Button(btns, text="开始对拍", style="TButton",
+                                    command=self._start)
+        self.btn_start.pack(side="left", padx=(0, 6))
+        self.btn_stop = ttk.Button(btns, text="停止", style="Red.TButton",
+                                   command=self._stop, state="disabled")
+        self.btn_stop.pack(side="left")
+
+        font = ("Menlo", 10) if sys.platform == "darwin" else ("Consolas", 9)
+        # 试运行输出区（只读，独立于主日志）
+        self.tryout_head = ttk.Frame(box)
+        self.tryout_head.pack(fill="x", pady=(6, 0))
+        ttk.Label(self.tryout_head, text="试运行输出").pack(side="left")
+        self.tryout_text = tk.Text(box, height=6, wrap="word", font=font,
+                                   bg=self.text_bg, fg=self.text_fg,
+                                   selectbackground=self.accent,
+                                   relief="solid", bd=1, padx=6, pady=4,
+                                   state="disabled", insertofftime=0)
+        self.tryout_text.pack(fill="x", pady=(4, 0))
+
+        self.log_text = scrolledtext.ScrolledText(box, height=12, state="disabled",
+                                                  wrap="word", font=font,
+                                                  bg=self.text_bg, fg=self.text_fg,
+                                                  selectbackground=self.accent,
+                                                  insertofftime=0)
+        self.log_text.pack(fill="both", expand=True, pady=(6, 0))
+
+    # ------------------------------------------------------------------ #
+    # 浏览与生成器面板操作
+    # ------------------------------------------------------------------ #
+    def _browse(self, var, tag):
+        """打开文件选择框，把所选路径填入命令输入框并记录目录。"""
+        path = filedialog.askopenfilename(title="选择可执行文件或脚本")
+        if not path:
+            return
+        var.set('"' + path + '"' if " " in path else path)
+        d = os.path.dirname(path)
+        is_cpp = os.path.splitext(path)[1].lower() in (".cpp", ".cc", ".cxx", ".c")
+        mode = "C++ 源码" if is_cpp else "运行命令"
+        if tag == "sol":
+            self.sol_dir = d
+            self.sol_mode.set(mode)
+        elif tag == "brute":
+            self.brute_dir = d
+            self.brute_mode.set(mode)
+        elif tag == "ext":
+            self.extgen_dir = d
+            self.ext_gen_mode.set(mode)
+
+    def _switch_gen_mode(self):
+        """根据单选按钮切换外置 / 内置生成器面板。"""
+        if self.gen_mode.get() == "external":
+            self.builtin_panel.grid_remove()
+            self.ext_panel.grid()
+        else:
+            self.ext_panel.grid_remove()
+            self.builtin_panel.grid()
+
+    def _add_var(self, kind):
+        """添加一个变量条目。kind: int/float/array/perm/tree/graph。"""
+        row = VariableRow(self.var_inner, kind, self)
+        self.rows.append(row)
+        row.frame.pack(fill="x", padx=2, pady=2)
+        self._bind_scroll_recursive(row.frame)
+        self._refresh_sources()
+        self._update_scrollregion()
+
+    def move_row(self, row, delta):
+        """上下移动变量条目。"""
+        i = self.rows.index(row)
+        j = i + delta
+        if not (0 <= j < len(self.rows)):
+            return
+        self.rows[i], self.rows[j] = self.rows[j], self.rows[i]
+        self._repack_rows()
+        self._refresh_sources()
+
+    def delete_row(self, row):
+        """删除变量条目。"""
+        if row in self.rows:
+            self.rows.remove(row)
+            row.frame.destroy()
+            self._refresh_sources()
+            self._update_scrollregion()
+
+    def _refresh_sources(self):
+        """重建各行的“来源”下拉选项，只列出它之前的可引用变量。"""
+        refable = ("int", "float", "tree", "graph", "perm")
+        for i, row in enumerate(self.rows):
+            values = ["随机范围"]
+            refs = []
+            for j, prev in enumerate(self.rows[:i]):
+                if prev.kind in refable:
+                    label = f"变量{j + 1}（{VariableRow.KIND_NAMES[prev.kind]}）"
+                    values.append(label)
+                    refs.append((label, prev))
+            if row.kind == "array":
+                cur = row.len_source_var.get()
+                row._set_sources("len_source", "_len_refs",
+                                 ["len_min", "len_max"], values, refs,
+                                 cur if cur in values else "随机范围")
+                cur = row.rows_source_var.get()
+                row._set_sources("rows_source", "_rows_refs",
+                                 ["rows_min", "rows_max"], values, refs,
+                                 cur if cur in values else "随机范围")
+            elif row.kind in ("perm", "tree"):
+                cur = row.n_source_var.get()
+                row._set_sources("n_source", "_n_refs",
+                                 ["n_min", "n_max"], values, refs,
+                                 cur if cur in values else "随机范围")
+            elif row.kind == "graph":
+                cur = row.n_source_var.get()
+                row._set_sources("n_source", "_n_refs",
+                                 ["n_min", "n_max"], values, refs,
+                                 cur if cur in values else "随机范围")
+                cur = row.m_source_var.get()
+                row._set_sources("m_source", "_m_refs",
+                                 ["m_min", "m_max"], values, refs,
+                                 cur if cur in values else "随机范围")
+
+    def _repack_rows(self):
+        """按 rows 列表顺序重新 pack 全部条目（改变上下顺序）。"""
+        for row in self.rows:
+            row.frame.pack_forget()
+        for row in self.rows:
+            row.frame.pack(fill="x", padx=2, pady=2)
+        self._update_scrollregion()
+
+    def _update_scrollregion(self):
+        self.var_canvas.configure(scrollregion=self.var_canvas.bbox("all"))
+
+    @staticmethod
+    def _wheel_units(event, px_per_notch):
+        """把滚轮事件换算为像素滚动量（yscrollincrement=1，1 单位 = 1px）。
+        Windows 一格 delta=±120 对应 px_per_notch 像素；触控板/平滑滚轮为小步长
+        （如 delta=±1..±30），按比例换算后累积，实现像素级平滑滚动。"""
+        delta = getattr(event, "delta", 0)
+        num = getattr(event, "num", 0)
+        if delta:
+            return -delta / 120.0 * px_per_notch
+        if num == 4:
+            return -px_per_notch
+        if num == 5:
+            return px_per_notch
+        return 0.0
+
+    def _scroll_units(self, canvas, units):
+        """yview_scroll 只接受整数，这里把小数像素累加后再按整像素滚动，并做边界钳制。"""
+        acc = getattr(canvas, "_wheel_acc", 0.0) + units
+        whole = int(acc)
+        frac = acc - whole
+        canvas._wheel_acc = frac
+        if whole == 0:
+            return
+        top, bottom = canvas.yview()
+        if whole < 0 and top <= 0.0:
+            canvas._wheel_acc = 0.0
+            return
+        if whole > 0 and bottom >= 1.0:
+            canvas._wheel_acc = 0.0
+            return
+        canvas.yview_scroll(whole, "units")
+
+    @staticmethod
+    def _region_at_boundary(region, units):
+        """判断自滚动区域是否已到 units 方向的边界（滚动链放行依据）。"""
+        try:
+            top, bottom = region.yview()
+        except Exception:
+            return True
+        if units < 0 and top <= 0.0:
+            return True
+        if units > 0 and bottom >= 1.0:
+            return True
+        return False
+
+    def _on_canvas_wheel(self, event):
+        """滚动内置生成器变量列表（每格约 120px）；到边界时放行给整窗（滚动链）。"""
+        units = self._wheel_units(event, 120.0)
+        if units == 0:
+            return "break"
+        top, bottom = self.var_canvas.yview()
+        if (units < 0 and top <= 0.0) or (units > 0 and bottom >= 1.0):
+            self.var_canvas._wheel_acc = 0.0
+            return None   # 已到边界：不 break，让整窗滚轮接管
+        self._scroll_units(self.var_canvas, units)
+        return "break"   # 阻止 bind_all 整页滚轮再次触发
+
+    def _bind_scroll_recursive(self, widget):
+        """把滚轮事件递归绑定到 widget 及其所有子控件，保证列表内任意位置可滚动。"""
+        widget.bind("<MouseWheel>", self._on_canvas_wheel)
+        widget.bind("<Button-4>", self._on_canvas_wheel)
+        widget.bind("<Button-5>", self._on_canvas_wheel)
+        for child in widget.winfo_children():
+            self._bind_scroll_recursive(child)
+
+    def _on_window_wheel(self, event):
+        """整窗滚轮：自滚动区域到边界时接管（滚动链），否则交给内层。"""
+        units = self._wheel_units(event, 160.0)
+        if units == 0:
+            return
+        for region in getattr(self, "_scroll_regions", ()):
+            if self._is_descendant(event.widget, region) and \
+                    not self._region_at_boundary(region, units):
+                return   # 内层还有空间，交给内层
+        self._scroll_units(self.body_canvas, units)
+
+    @staticmethod
+    def _is_descendant(widget, ancestor):
+        """判断 widget 是否为 ancestor 的子孙（含自身）。"""
+        while widget is not None:
+            if widget is ancestor:
+                return True
+            try:
+                widget = widget.master
+            except Exception:
+                return False
+        return False
+
+    def _preview(self):
+        """按当前设置生成一次数据并显示到预览区（不弹窗）。"""
+        if self.gen_mode.get() == "external":
+            self._preview_external()
+            return
+        if not self.rows:
+            self._set_preview("请先添加至少一个变量。\n")
+            return
+        seed_str = self.seed.get().strip()
+        try:
+            random.seed(int(seed_str) if seed_str else None)
+        except ValueError:
+            self._set_preview("错误：随机种子必须是整数或留空。\n")
+            return
+        lines, err = self._generate_builtin(self._snapshot_vars())
+        if err:
+            self._set_preview("生成失败：" + err + "\n")
+            return
+        total = len(lines)
+        shown = lines[:200]
+        text = "".join(f"{i + 1:>4}  {ln}\n" for i, ln in enumerate(shown))
+        if total > 200:
+            text += f"......（共 {total} 行，此处仅显示前 200 行）\n"
+        self._set_preview(text)
+
+    def _preview_external(self):
+        """外置生成器预览：实际运行一次生成程序，把 stdout 显示到预览区。"""
+        cmd = self.ext_gen_cmd.get().strip()
+        if not cmd:
+            self._set_preview("外置生成程序命令为空。\n")
+            return
+        if self.ext_gen_mode.get() == "C++ 源码":
+            src = self._parse_command(cmd)[0] if cmd else ""
+            build_dir = os.path.join(tempfile.gettempdir(), "duipai_preview_build")
+            os.makedirs(build_dir, exist_ok=True)
+            compiler = self.compiler.get().strip() or "g++"
+            flags = self.compile_flags.get().strip() or "-O2 -std=c++17"
+            exe, cerr = self._compile_cpp(src, build_dir, "gen", compiler, flags)
+            if cerr:
+                self._set_preview("外置生成程序编译失败：\n" + cerr + "\n")
+                return
+            cmd, base_dir = exe, build_dir
+        else:
+            base_dir = self.extgen_dir
+        seed_str = self.seed.get().strip()
+        try:
+            seed = int(seed_str) if seed_str else None
+        except ValueError:
+            self._set_preview("错误：随机种子必须是整数或留空。\n")
+            return
+        try:
+            timeout = float(self.timeout.get().strip())
+        except ValueError:
+            timeout = 5.0
+        if timeout <= 0:
+            timeout = 5.0
+        out, err = self._generate_external(timeout, cmd, base_dir, seed)
+        if err:
+            self._set_preview("外置生成程序出错：" + err + "\n")
+            return
+        lines = out.decode("utf-8", "replace").splitlines()
+        shown = lines[:200]
+        text = "".join(f"{i + 1:>4}  {ln}\n" for i, ln in enumerate(shown))
+        if len(lines) > 200:
+            text += f"......（共 {len(lines)} 行，此处仅显示前 200 行）\n"
+        self._set_preview(text)
+
+    def _set_preview(self, text):
+        """把文本写入只读预览区。"""
+        self.preview_text.configure(state="normal")
+        self.preview_text.delete("1.0", "end")
+        self.preview_text.insert("1.0", text)
+        self.preview_text.configure(state="disabled")
+
+    # ------------------------------------------------------------------ #
+    # 试运行（正解/暴力各按钮）
+    # ------------------------------------------------------------------ #
+    def _tryout_prog_spec(self, tag):
+        """构造单个程序的配置（用于试运行）。"""
+        if tag == "sol":
+            var, mode_var, d, label = self.sol_cmd, self.sol_mode, self.sol_dir, "正解"
+        elif tag == "brute":
+            var, mode_var, d, label = self.brute_cmd, self.brute_mode, self.brute_dir, "暴力"
+        elif tag == "ext":
+            var, mode_var, d, label = self.ext_gen_cmd, self.ext_gen_mode, self.extgen_dir, "外置生成器"
+        else:
+            return None
+        raw = var.get().strip()
+        if not raw:
+            return None
+        if mode_var.get() == "C++ 源码":
+            tokens = self._parse_command(raw)
+            src = tokens[0] if tokens else ""
+            if src and not os.path.isabs(src):
+                src = os.path.normpath(os.path.join(d, src))
+            return {"mode": "C++ 源码", "cmd": src, "dir": d, "label": label}
+        return {"mode": "运行命令", "cmd": raw, "dir": d, "label": label}
+
+    def _tryout(self, tag):
+        """试运行：生成一份样例并运行对应程序，结果显示到“试运行输出”区。"""
+        if self.running:
+            self._set_tryout("对拍进行中，请先停止再试运行。\n")
+            return
+        if getattr(self, "_trying", False):
+            self._set_tryout("已有试运行正在进行，请稍候。\n")
+            return
+        prog = self._tryout_prog_spec(tag)
+        if prog is None:
+            self._set_tryout("请先填写该程序的命令或 C++ 源码路径。\n")
+            return
+        gen_mode = self.gen_mode.get()
+        var_config = []
+        ext_prog = None
+        if gen_mode == "external":
+            ext_prog = self._tryout_prog_spec("ext")
+            if ext_prog is None:
+                self._set_tryout("外置生成程序命令为空。\n")
+                return
+        else:
+            var_config = self._snapshot_vars()
+            if not var_config:
+                self._set_tryout("内置生成器至少需要添加一个变量。\n")
+                return
+        try:
+            timeout = float(self.timeout.get().strip())
+        except ValueError:
+            timeout = 5.0
+        if timeout <= 0:
+            timeout = 5.0
+        seed_str = self.seed.get().strip()
+        try:
+            seed = int(seed_str) if seed_str else None
+        except ValueError:
+            self._set_tryout("错误：随机种子必须是整数或留空。\n")
+            return
+        compiler = self.compiler.get().strip() or "g++"
+        flags = self.compile_flags.get().strip() or "-O2 -std=c++17"
+        self._trying = True
+        self._set_tryout(f"正在试运行“{prog['label']}”……\n")
+        threading.Thread(
+            target=self._tryout_worker,
+            args=(prog, ext_prog, gen_mode, var_config, seed, timeout,
+                  compiler, flags), daemon=True).start()
+
+    def _tryout_worker(self, prog, ext_prog, gen_mode, var_config, seed,
+                       timeout, compiler, flags):
+        """试运行后台线程：生成样例 -> 编译/运行目标程序 -> 回传结果。"""
+        workdir = tempfile.mkdtemp(prefix="duipai_try_")
+        try:
+            ext_ready = None
+            if ext_prog is not None:
+                self._set_tryout("正在准备外置生成程序（编译）……\n")
+                ext_run, ext_run_dir, err = self._prepare_program(
+                    ext_prog, workdir, "gen", compiler, flags)
+                if err:
+                    self._set_tryout("外置生成程序编译失败：\n" + err + "\n")
+                    return
+                ext_ready = {"mode": ext_prog["mode"], "cmd": ext_run,
+                             "dir": ext_run_dir}
+            self._set_tryout("正在生成样例……\n")
+            random.seed(seed if seed is not None else None)
+            input_data, err = self._generate_input(
+                timeout, gen_mode, ext_ready, seed, var_config)
+            if err:
+                self._set_tryout("样例生成失败：" + err + "\n")
+                return
+            sample_lines = input_data.decode("utf-8", "replace").splitlines()
+            sample_show = "\n".join(sample_lines[:5])
+            if len(sample_lines) > 5:
+                sample_show += "\n..."
+            if prog["mode"] == "C++ 源码":
+                self._set_tryout("正在编译 C++ 源码……\n")
+            run_cmd, run_dir, cerr = self._prepare_program(
+                prog, workdir, "try", compiler, flags)
+            if cerr:
+                self._set_tryout(f"“{prog['label']}”编译失败：\n{cerr}\n")
+                return
+            self._set_tryout("正在运行……\n")
+            t0 = time.perf_counter()
+            r = self._run_program(run_cmd, run_dir, input_data, timeout)
+            dt = time.perf_counter() - t0
+            if r["status"] == "tle":
+                self._set_tryout(
+                    f"“{prog['label']}” 超时（>{timeout}s）\n")
+                return
+            if r["status"] != "ok":
+                self._set_tryout(
+                    f"“{prog['label']}” 运行出错：{r['error']}\n")
+                return
+            out = r["stdout"].decode("utf-8", "replace")
+            errs = r["stderr"].decode("utf-8", "replace").strip()
+            txt = (f"【{prog['label']} 试运行】耗时 {dt:.3f}s，返回码 {r['returncode']}\n"
+                   f"样例输入（前5行）：\n{sample_show}\n"
+                   f"标准输出：\n{out.rstrip()}\n")
+            if errs:
+                txt += f"错误输出：\n{errs[:500]}\n"
+            self._set_tryout(txt)
+        except Exception as e:
+            import traceback
+            self._set_tryout(f"试运行发生内部错误：{e!r}\n"
+                             + traceback.format_exc()[-1200:] + "\n")
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+            self._trying = False
+
+    def _set_tryout(self, text):
+        """把文本投递到“试运行输出”区（线程安全）。"""
+        self.msg_queue.put(("tryout", text))
+
+    # ------------------------------------------------------------------ #
+    # 配置快照（在主线程读取所有 Tcl 变量，供后台线程使用）
+    # ------------------------------------------------------------------ #
+    def _snapshot_vars(self):
+        """把当前内置生成器的变量列表转成纯 Python 配置。"""
+        config = []
+
+        def resolve_ref(row, attr, refs_attr):
+            """若某个“来源”引用前面变量，返回其配置下标，否则 None。"""
+            src = getattr(row, attr + "_var").get()
+            if src == "随机范围":
+                return None
+            ref_row = row._ref_row(refs_attr, src)
+            if ref_row is not None and self.rows.index(ref_row) < self.rows.index(row):
+                return self.rows.index(ref_row)
+            return None
+
+        for row in self.rows:
+            if row.kind == "int":
+                config.append({"kind": "int",
+                               "min": row.min_entry.get(),
+                               "max": row.max_entry.get()})
+            elif row.kind == "float":
+                config.append({"kind": "float",
+                               "min": row.min_entry.get(),
+                               "max": row.max_entry.get()})
+            elif row.kind == "array":
+                config.append({"kind": "array",
+                               "elem_type": row.elem_type.get(),
+                               "el_min": row.el_min.get(),
+                               "el_max": row.el_max.get(),
+                               "prec": row.prec_entry.get(),
+                               "rows_mode": "range",
+                               "rows_ref": None,
+                               "rows_min": row.rows_min.get(),
+                               "rows_max": row.rows_max.get(),
+                               "len_mode": "range",
+                               "len_ref": None,
+                               "len_min": row.len_min.get(),
+                               "len_max": row.len_max.get()})
+                ref = resolve_ref(row, "rows_source", "_rows_refs")
+                if ref is not None:
+                    config[-1]["rows_mode"] = "ref"
+                    config[-1]["rows_ref"] = ref
+                ref = resolve_ref(row, "len_source", "_len_refs")
+                if ref is not None:
+                    config[-1]["len_mode"] = "ref"
+                    config[-1]["len_ref"] = ref
+            elif row.kind == "perm":
+                config.append({"kind": "perm",
+                               "n_mode": "range", "n_ref": None,
+                               "n_min": row.n_min.get(),
+                               "n_max": row.n_max.get()})
+                ref = resolve_ref(row, "n_source", "_n_refs")
+                if ref is not None:
+                    config[-1]["n_mode"] = "ref"
+                    config[-1]["n_ref"] = ref
+            elif row.kind == "tree":
+                config.append({"kind": "tree",
+                               "n_mode": "range", "n_ref": None,
+                               "n_min": row.n_min.get(),
+                               "n_max": row.n_max.get(),
+                               "w_mode": row.w_mode_var.get(),
+                               "w_min": row.w_min.get(),
+                               "w_max": row.w_max.get(),
+                               "w_prec": row.w_prec.get()})
+                ref = resolve_ref(row, "n_source", "_n_refs")
+                if ref is not None:
+                    config[-1]["n_mode"] = "ref"
+                    config[-1]["n_ref"] = ref
+            elif row.kind == "graph":
+                config.append({"kind": "graph",
+                               "n_mode": "range", "n_ref": None,
+                               "n_min": row.n_min.get(),
+                               "n_max": row.n_max.get(),
+                               "m_mode": "range", "m_ref": None,
+                               "m_min": row.m_min.get(),
+                               "m_max": row.m_max.get(),
+                               "directed": row.g_dir_var.get() == "有向",
+                               "connected": row.g_conn_var.get() == "连通",
+                               "w_mode": row.w_mode_var.get(),
+                               "w_min": row.w_min.get(),
+                               "w_max": row.w_max.get(),
+                               "w_prec": row.w_prec.get()})
+                ref = resolve_ref(row, "n_source", "_n_refs")
+                if ref is not None:
+                    config[-1]["n_mode"] = "ref"
+                    config[-1]["n_ref"] = ref
+                ref = resolve_ref(row, "m_source", "_m_refs")
+                if ref is not None:
+                    config[-1]["m_mode"] = "ref"
+                    config[-1]["m_ref"] = ref
+        return config
+
+    # ------------------------------------------------------------------ #
+    # 数据生成（后台线程可安全调用）
+    # ------------------------------------------------------------------ #
+    def _generate_input(self, timeout, gen_mode, ext_prog, seed, var_config):
+        """生成一组测试数据，返回 (bytes, 错误信息)。"""
+        if gen_mode == "external":
+            return self._generate_external(timeout, ext_prog["cmd"],
+                                           ext_prog["dir"], seed)
+        lines, err = self._generate_builtin(var_config)
+        if err:
+            return None, err
+        return "\n".join(lines).encode("utf-8") + b"\n", None
+
+    def _generate_external(self, timeout, cmd, base_dir, seed):
+        """运行外置生成器，捕获其 stdout 作为测试数据。"""
+        args = self._parse_command(cmd)
+        if not args:
+            return None, "外置生成器命令为空"
+        if seed is not None:
+            args = args + ["--seed", str(seed)]
+        cwd = base_dir if os.path.isdir(base_dir) else os.getcwd()
+        args = self._resolve_program_path(args, cwd)
+        try:
+            proc = subprocess.Popen(args, cwd=cwd,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    **self._popen_extra())
+        except FileNotFoundError:
+            return None, f"找不到外置生成器：{args[0]}"
+        except Exception as e:
+            return None, str(e)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self._kill(proc)
+            return None, f"外置生成器超时（>{timeout}s）"
+        if proc.returncode != 0:
+            msg = stderr.decode("utf-8", "replace").strip()
+            return None, f"外置生成器返回码 {proc.returncode}：{msg[:200]}"
+        return stdout, None
+
+    @staticmethod
+    def _all_pairs(n, directed):
+        """列出无自环的全部顶点对（有向含顺序，无向去重）。"""
+        pairs = []
+        for u in range(1, n + 1):
+            for v in range(1, n + 1):
+                if u == v:
+                    continue
+                if not directed and u > v:
+                    continue
+                pairs.append((u, v))
+        return pairs
+
+    def _generate_builtin(self, config):
+        """按变量配置从上到下逐行生成数据，返回 (行列表, 错误信息)。"""
+        lines = []      # 最终输出的每一行
+        produced = []   # produced[i] = 第 i 个配置项生成的行列表
+        ref_vals = []   # ref_vals[i] = 第 i 个配置项的数值（供引用），否则 None
+        for idx, item in enumerate(config, start=1):
+            try:
+                def ref_int(key):
+                    """读取“引用变量”的整数值（浮点取整）。"""
+                    ref_idx = item.get(key)
+                    if ref_idx is None or ref_idx >= idx - 1:
+                        raise ValueError("引用变量的位置无效")
+                    v = ref_vals[ref_idx]
+                    if v is None:
+                        raise ValueError("该变量不能作为引用源")
+                    return int(v)
+
+                kind = item["kind"]
+                if kind == "int":
+                    lo, hi = self._parse_pair(item["min"], item["max"],
+                                              True, "整数变量范围")
+                    value = random.randint(lo, hi)
+                    row_line = str(value)
+                    lines.append(row_line)
+                    produced.append([row_line])
+                    ref_vals.append(value)
+                elif kind == "float":
+                    lo, hi = self._parse_pair(item["min"], item["max"],
+                                              False, "浮点数变量范围")
+                    value = random.uniform(lo, hi)
+                    row_line = format_float(value, 6)
+                    lines.append(row_line)
+                    produced.append([row_line])
+                    ref_vals.append(value)
+                elif kind == "array":
+                    # 元素生成器（根据元素类型确定）
+                    if item["elem_type"] == "浮点数":
+                        elo, ehi = self._parse_pair(item["el_min"], item["el_max"],
+                                                    False, "数组元素范围")
+                        prec = self._parse_int(item["prec"], 6, "数组元素精度")
+                        if not (0 <= prec <= 15):
+                            raise ValueError("数组元素精度应在 0~15 之间")
+
+                        def make_elems(n):
+                            return [format_float(random.uniform(elo, ehi), prec)
+                                    for _ in range(n)]
+                    else:
+                        elo, ehi = self._parse_pair(item["el_min"], item["el_max"],
+                                                    True, "数组元素范围")
+
+                        def make_elems(n):
+                            return [str(random.randint(elo, ehi))
+                                    for _ in range(n)]
+
+                    # 行数 R
+                    if item.get("rows_mode") == "ref":
+                        rows = ref_int("rows_ref")
+                    else:
+                        rlo, rhi = self._parse_pair(item["rows_min"], item["rows_max"],
+                                                    True, "数组行数范围")
+                        if rlo < 1:
+                            raise ValueError("数组行数范围最小值应为正整数")
+                        rows = random.randint(rlo, rhi)
+                    if rows < 1:
+                        raise ValueError("数组行数不能小于 1")
+
+                    # 每行长度 L
+                    if item.get("len_mode") == "ref":
+                        length = ref_int("len_ref")
+                    else:
+                        llo, lhi = self._parse_pair(item["len_min"], item["len_max"],
+                                                    True, "数组每行长度范围")
+                        if llo < 0:
+                            raise ValueError("数组每行长度范围最小值为非负整数")
+                        length = random.randint(llo, lhi)
+                    if length < 0:
+                        raise ValueError("数组每行长度不能为负")
+
+                    # 输出 R 行、每行 L 个元素（支持 2*n、n*m 等格式）
+                    row_lines = [" ".join(make_elems(length))
+                                 for _ in range(rows)]
+                    lines.extend(row_lines)
+                    produced.append(row_lines)
+                    ref_vals.append(None)
+                elif kind == "perm":
+                    if item["n_mode"] == "ref":
+                        n = ref_int("n_ref")
+                    else:
+                        n = random.randint(*self._parse_pair(
+                            item["n_min"], item["n_max"], True, "排列长度范围"))
+                    if n < 1:
+                        raise ValueError("排列长度 n 应 >= 1")
+                    perm = list(range(1, n + 1))
+                    random.shuffle(perm)
+                    row_line = " ".join(map(str, perm))
+                    lines.append(row_line)
+                    produced.append([row_line])
+                    ref_vals.append(n)
+                elif kind == "tree":
+                    if item["n_mode"] == "ref":
+                        n = ref_int("n_ref")
+                    else:
+                        n = random.randint(*self._parse_pair(
+                            item["n_min"], item["n_max"], True, "树顶点数范围"))
+                    if n < 1:
+                        raise ValueError("树顶点数 n 应 >= 1")
+                    w_mode = item["w_mode"]
+                    if w_mode == "整数":
+                        wlo, whi = self._parse_pair(item["w_min"], item["w_max"],
+                                                    True, "树边权范围")
+                    elif w_mode == "浮点":
+                        wlo, whi = self._parse_pair(item["w_min"], item["w_max"],
+                                                    False, "树边权范围")
+                        wprec = self._parse_int(item["w_prec"], 6, "树边权精度")
+                        if not (0 <= wprec <= 15):
+                            raise ValueError("树边权精度应在 0~15 之间")
+                    # 随机带标号树：节点 i 随机连到前面某个节点
+                    edge_lines = []
+                    for i in range(2, n + 1):
+                        p = random.randint(1, i - 1)
+                        u, v = (i, p) if random.random() < 0.5 else (p, i)
+                        if w_mode == "整数":
+                            edge_lines.append(f"{u} {v} {random.randint(wlo, whi)}")
+                        elif w_mode == "浮点":
+                            edge_lines.append(
+                                f"{u} {v} {format_float(random.uniform(wlo, whi), wprec)}")
+                        else:
+                            edge_lines.append(f"{u} {v}")
+                    random.shuffle(edge_lines)
+                    tree_lines = [str(n)] + edge_lines
+                    lines.extend(tree_lines)
+                    produced.append(tree_lines)
+                    ref_vals.append(n)
+                elif kind == "graph":
+                    directed = item["directed"]
+                    connected = item["connected"]
+                    if item["n_mode"] == "ref":
+                        n = ref_int("n_ref")
+                    else:
+                        n = random.randint(*self._parse_pair(
+                            item["n_min"], item["n_max"], True, "图顶点数范围"))
+                    if item["m_mode"] == "ref":
+                        m = ref_int("m_ref")
+                    else:
+                        m = random.randint(*self._parse_pair(
+                            item["m_min"], item["m_max"], True, "图边数范围"))
+                    if n < 1:
+                        raise ValueError("图顶点数 n 应 >= 1")
+                    if m < 0:
+                        raise ValueError("图边数 m 不能为负")
+                    possible = n * (n - 1) if directed else n * (n - 1) // 2
+                    if m > possible:
+                        raise ValueError(
+                            f"图边数 m={m} 超过上限 {possible}"
+                            f"（{'有向' if directed else '无向'}，n={n}）")
+                    if connected and m < n - 1:
+                        raise ValueError("连通图要求 m >= n-1")
+                    edge_set = set()
+                    if connected:
+                        for i in range(2, n + 1):
+                            p = random.randint(1, i - 1)
+                            u, v = (i, p) if random.random() < 0.5 else (p, i)
+                            if not directed and u > v:
+                                u, v = v, u
+                            edge_set.add((u, v))
+                    if len(edge_set) < m:
+                        if possible <= 100000:
+                            all_pairs = self._all_pairs(n, directed)
+                            candidates = [e for e in all_pairs if e not in edge_set]
+                            edge_set.update(random.sample(candidates, m - len(edge_set)))
+                        else:
+                            attempts = 0
+                            while len(edge_set) < m and attempts < m * 50 + 2000:
+                                u = random.randint(1, n)
+                                v = random.randint(1, n)
+                                if u == v:
+                                    attempts += 1
+                                    continue
+                                if not directed and u > v:
+                                    u, v = v, u
+                                edge_set.add((u, v))
+                                attempts += 1
+                            if len(edge_set) < m:
+                                raise ValueError("随机补边失败，请检查参数")
+                    w_mode = item["w_mode"]
+                    if w_mode == "整数":
+                        wlo, whi = self._parse_pair(item["w_min"], item["w_max"],
+                                                    True, "图边权范围")
+                    elif w_mode == "浮点":
+                        wlo, whi = self._parse_pair(item["w_min"], item["w_max"],
+                                                    False, "图边权范围")
+                        wprec = self._parse_int(item["w_prec"], 6, "图边权精度")
+                        if not (0 <= wprec <= 15):
+                            raise ValueError("图边权精度应在 0~15 之间")
+                    edges = list(edge_set)
+                    random.shuffle(edges)
+                    edge_lines = []
+                    for u, v in edges:
+                        if w_mode == "整数":
+                            edge_lines.append(f"{u} {v} {random.randint(wlo, whi)}")
+                        elif w_mode == "浮点":
+                            edge_lines.append(
+                                f"{u} {v} {format_float(random.uniform(wlo, whi), wprec)}")
+                        else:
+                            edge_lines.append(f"{u} {v}")
+                    graph_lines = [f"{n} {m}"] + edge_lines
+                    lines.extend(graph_lines)
+                    produced.append(graph_lines)
+                    ref_vals.append(n)
+            except ValueError as e:
+                return None, f"第 {idx} 个变量设置错误：{e}"
+        return lines, None
+
+    @staticmethod
+    def _parse_int(s, default, label):
+        """解析整数输入，为空则返回默认值。"""
+        s = s.strip()
+        return default if not s else int(s)
+
+    @staticmethod
+    def _parse_pair(slo, shi, is_int, label):
+        """解析"最小值/最大值"一对字符串，校验大小关系。"""
+        try:
+            if is_int:
+                lo, hi = int(slo.strip()), int(shi.strip())
+            else:
+                lo, hi = float(slo.strip()), float(shi.strip())
+        except ValueError:
+            raise ValueError(f"{label}应填{'整数' if is_int else '数字'}")
+        if lo > hi:
+            raise ValueError(f"{label}的最小值不能大于最大值")
+        return lo, hi
+
+    # ------------------------------------------------------------------ #
+    # 运行程序与比较输出
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _parse_command(cmd):
+        """把命令字符串切分为参数列表，兼容 Windows 路径。"""
+        cmd = cmd.strip()
+        if not cmd:
+            return []
+        try:
+            if os.name == "nt":
+                tokens = shlex.split(cmd, posix=False)
+                # posix=False 时引号不会被处理，这里手动去掉包围引号
+                return [t[1:-1] if len(t) >= 2 and t[0] == t[-1]
+                        and t[0] in "\"'" else t for t in tokens]
+            return shlex.split(cmd)
+        except ValueError:
+            return [cmd]
+
+    @staticmethod
+    def _resolve_program_path(args, cwd):
+        """把带路径/相对路径的程序名解析为绝对路径；纯命令名走 PATH。"""
+        if not args:
+            return args
+        prog = args[0]
+        if not os.path.isabs(prog) and (
+                os.sep in prog or "/" in prog or prog.startswith(".")):
+            return [os.path.normpath(os.path.join(cwd, prog))] + args[1:]
+        return args
+
+    def _run_program(self, cmd_str, base_dir, input_bytes, timeout):
+        """运行一个程序，返回状态字典。status: ok / tle / error。"""
+        if isinstance(input_bytes, str):
+            input_bytes = input_bytes.encode("utf-8")
+        args = self._parse_command(cmd_str)
+        if not args:
+            return {"status": "error", "returncode": None, "stdout": b"",
+                    "stderr": b"", "error": "命令为空"}
+        cwd = base_dir if base_dir and os.path.isdir(base_dir) else os.getcwd()
+        args = self._resolve_program_path(args, cwd)
+        try:
+            proc = subprocess.Popen(args, cwd=cwd,
+                                    stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    **self._popen_extra())
+        except FileNotFoundError:
+            return {"status": "error", "returncode": None, "stdout": b"",
+                    "stderr": b"", "error": f"找不到程序或解释器：{args[0]}"}
+        except Exception as e:
+            return {"status": "error", "returncode": None, "stdout": b"",
+                    "stderr": b"", "error": str(e)}
+        try:
+            stdout, stderr = proc.communicate(input=input_bytes, timeout=timeout)
+            return {"status": "ok", "returncode": proc.returncode,
+                    "stdout": stdout, "stderr": stderr, "error": ""}
+        except subprocess.TimeoutExpired:
+            self._kill(proc)
+            return {"status": "tle", "returncode": None, "stdout": b"",
+                    "stderr": b"", "error": ""}
+
+    @staticmethod
+    def _popen_extra():
+        """Windows 下禁止子进程创建控制台窗口（防止终端闪现）。"""
+        if os.name == "nt":
+            return {"creationflags": subprocess.CREATE_NO_WINDOW}
+        return {}
+
+    def _compile_cpp(self, source, workdir, name, compiler, flags):
+        """编译 C++ 源码，返回 (可执行文件路径, 错误信息)。超时 60 秒。"""
+        if not os.path.isfile(source):
+            return None, f"找不到源码文件：{source}"
+        exe = os.path.join(workdir, name + (".exe" if os.name == "nt" else ""))
+        args = [compiler] + self._parse_command(flags) + [source, "-o", exe]
+        cwd = os.path.dirname(source) or os.getcwd()
+        try:
+            proc = subprocess.Popen(args, cwd=cwd,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    **self._popen_extra())
+        except FileNotFoundError:
+            return None, f"找不到编译器：{compiler}"
+        except Exception as e:
+            return None, str(e)
+        try:
+            stdout, stderr = proc.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            self._kill(proc)
+            return None, "编译超时（>60s）"
+        if proc.returncode != 0:
+            msg = stderr.decode("utf-8", "replace")
+            lines = [ln for ln in msg.splitlines() if ln.strip()]
+            return None, (f"编译失败，返回码 {proc.returncode}：\n"
+                          + "\n".join(lines[:40]))
+        return exe, None
+
+    def _prepare_program(self, prog, workdir, name, compiler, flags):
+        """准备一个程序：C++ 源码模式先编译，返回 (运行命令, 运行目录, 错误)。"""
+        if prog["mode"] == "C++ 源码":
+            exe, err = self._compile_cpp(prog["cmd"], workdir, name,
+                                         compiler, flags)
+            if err:
+                return None, None, err
+            self._log(f"[编译] {prog['label']}：{os.path.basename(prog['cmd'])}"
+                      f" -> {os.path.basename(exe)} 编译完成")
+            return exe, workdir, None
+        return prog["cmd"], prog["dir"], None
+
+    @staticmethod
+    def _kill(proc):
+        """尽量终止超时子进程。"""
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.communicate(timeout=2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _compare(out1, out2, ignore_ws):
+        """比较两份输出，可忽略行末空格与末尾空行。"""
+        if ignore_ws:
+            return Application._normalize(out1) == Application._normalize(out2)
+        return out1 == out2
+
+    @staticmethod
+    def _normalize(text):
+        """每行 rstrip，并去除末尾连续空行。"""
+        lines = text.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return [ln.rstrip() for ln in lines]
+
+    # ------------------------------------------------------------------ #
+    # 对拍控制（后台线程）
+    # ------------------------------------------------------------------ #
+    def _start(self):
+        """开始对拍：在主线程快照配置并启动后台线程。"""
+        if self.running:
+            return
+
+        def prog_spec(cmd_var, mode_var, base_dir, label):
+            """构造程序配置：运行命令保持原样，C++ 源码解析出源码路径（相对路径转绝对）。"""
+            raw = cmd_var.get().strip()
+            if not raw:
+                return None
+            if mode_var.get() == "C++ 源码":
+                tokens = self._parse_command(raw)
+                src = tokens[0] if tokens else ""
+                if src and not os.path.isabs(src):
+                    src = os.path.normpath(os.path.join(base_dir, src))
+                return {"mode": "C++ 源码", "cmd": src, "dir": base_dir,
+                        "label": label, "display": raw}
+            return {"mode": "运行命令", "cmd": raw, "dir": base_dir,
+                    "label": label, "display": raw}
+
+        sol_prog = prog_spec(self.sol_cmd, self.sol_mode, self.sol_dir, "正解")
+        brute_prog = prog_spec(self.brute_cmd, self.brute_mode, self.brute_dir, "暴力")
+        if sol_prog is None:
+            self._log("错误：请填写正解代码的运行命令或 C++ 源码路径。")
+            return
+        if brute_prog is None:
+            self._log("错误：请填写暴力代码的运行命令或 C++ 源码路径。")
+            return
+        try:
+            total = int(self.rounds.get().strip())
+        except ValueError:
+            self._log("错误：对拍组数必须是整数（-1 表示无限）。")
+            return
+        try:
+            timeout = float(self.timeout.get().strip())
+        except ValueError:
+            self._log("错误：超时时间必须是数字。")
+            return
+        if timeout <= 0:
+            self._log("错误：超时时间必须大于 0。")
+            return
+        seed_str = self.seed.get().strip()
+        seed = None
+        if seed_str:
+            try:
+                seed = int(seed_str)
+            except ValueError:
+                self._log("错误：随机种子必须是整数或留空。")
+                return
+        gen_mode = self.gen_mode.get()
+        ignore_ws = self.ignore_ws.get()
+        compiler = self.compiler.get().strip() or "g++"
+        flags = self.compile_flags.get().strip() or "-O2 -std=c++17"
+        ext_prog = None
+        var_config = []
+        if gen_mode == "external":
+            ext_prog = prog_spec(self.ext_gen_cmd, self.ext_gen_mode,
+                                 self.extgen_dir, "外置生成器")
+            if ext_prog is None:
+                self._log("错误：外置生成器命令为空。")
+                return
+        else:
+            var_config = self._snapshot_vars()
+            if not var_config:
+                self._log("错误：内置生成器至少需要添加一个变量。")
+                return
+
+        self.stop_event.clear()
+        self.running = True
+        self.btn_start.config(state="disabled")
+        self.btn_stop.config(state="normal")
+
+        mode = "外置生成器" if gen_mode == "external" else "内置生成器"
+        self._log("=" * 60)
+        self._log(f"开始对拍（{mode}）：共 {total if total != -1 else '无限'} 组，"
+                  f"超时 {timeout}s" + (f"，种子 {seed}" if seed is not None else ""))
+        self._log(f"正解：{sol_prog['display']}")
+        self._log(f"暴力：{brute_prog['display']}")
+
+        self.worker = threading.Thread(
+            target=self._run_loop,
+            args=(sol_prog, brute_prog, total, timeout, seed, gen_mode,
+                  ignore_ws, ext_prog, var_config, compiler, flags),
+            daemon=True)
+        self.worker.start()
+
+    def _stop(self):
+        """请求停止对拍。"""
+        self.stop_event.set()
+        self._log("收到停止请求，正在停止……")
+
+    def _run_loop(self, sol_prog, brute_prog, total, timeout, seed, gen_mode,
+                  ignore_ws, ext_prog, var_config, compiler, flags):
+        """对拍主循环，运行于独立线程中（不访问任何 Tcl 接口）。"""
+        workdir = tempfile.mkdtemp(prefix="duipai_")
+        tested = 0
+        stats = {"pass": 0, "wa": 0, "tle": 0, "re": 0, "error": 0}
+        reason = ""
+        try:
+            # 先编译所有 C++ 源码程序
+            sol_run, sol_run_dir, err = self._prepare_program(
+                sol_prog, workdir, "sol", compiler, flags)
+            if err:
+                stats["error"] += 1
+                self._log(f"[编译] 正解 失败：{err}")
+                reason = "编译失败"
+                return
+            brute_run, brute_run_dir, err = self._prepare_program(
+                brute_prog, workdir, "brute", compiler, flags)
+            if err:
+                stats["error"] += 1
+                self._log(f"[编译] 暴力 失败：{err}")
+                reason = "编译失败"
+                return
+            ext_ready = None
+            if ext_prog is not None:
+                ext_run, ext_run_dir, err = self._prepare_program(
+                    ext_prog, workdir, "gen", compiler, flags)
+                if err:
+                    stats["error"] += 1
+                    self._log(f"[编译] 外置生成器 失败：{err}")
+                    reason = "编译失败"
+                    return
+                ext_ready = {"mode": ext_prog["mode"], "cmd": ext_run,
+                             "dir": ext_run_dir}
+            random.seed(seed if seed is not None else None)
+            while not self.stop_event.is_set() and (total == -1 or tested < total):
+                tested += 1
+                n = tested
+                # 1) 生成输入数据
+                input_data, err = self._generate_input(
+                    timeout, gen_mode, ext_ready, seed, var_config)
+                if err:
+                    stats["error"] += 1
+                    self._log(f"第 {n} 组：数据生成失败：{err}")
+                    reason = "因出错中止"
+                    break
+                in_path = os.path.join(workdir, "test.in")
+                try:
+                    with open(in_path, "wb") as fh:
+                        fh.write(input_data)
+                except OSError as e:
+                    self._log(f"第 {n} 组：写入 test.in 失败：{e}")
+                    stats["error"] += 1
+                    reason = "因出错中止"
+                    break
+
+                # 2) 运行正解
+                r1 = self._run_program(sol_run, sol_run_dir,
+                                       input_data, timeout)
+                if r1["status"] != "ok":
+                    self._handle_abnormal(r1, "正解", n, workdir, stats, timeout)
+                    reason = "因出错中止"
+                    break
+                if r1["returncode"] != 0:
+                    stats["re"] += 1
+                    self._log(f"第 {n} 组：正解 返回码 {r1['returncode']}（RE）")
+                    self._save_fail(workdir)
+                    reason = "因出错中止"
+                    break
+
+                # 3) 运行暴力
+                r2 = self._run_program(brute_run, brute_run_dir,
+                                       input_data, timeout)
+                if r2["status"] != "ok":
+                    self._handle_abnormal(r2, "暴力", n, workdir, stats, timeout)
+                    reason = "因出错中止"
+                    break
+                if r2["returncode"] != 0:
+                    stats["re"] += 1
+                    self._log(f"第 {n} 组：暴力 返回码 {r2['returncode']}（RE）")
+                    self._save_fail(workdir)
+                    reason = "因出错中止"
+                    break
+
+                # 4) 比较输出
+                out1 = r1["stdout"].decode("utf-8", "replace")
+                out2 = r2["stdout"].decode("utf-8", "replace")
+                try:
+                    with open(os.path.join(workdir, "prog.out"), "w",
+                              encoding="utf-8") as fh:
+                        fh.write(out1)
+                    with open(os.path.join(workdir, "std.out"), "w",
+                              encoding="utf-8") as fh:
+                        fh.write(out2)
+                except OSError:
+                    pass
+
+                if self._compare(out1, out2, ignore_ws):
+                    stats["pass"] += 1
+                    self._log(f"第 {n} 组：PASS")
+                else:
+                    stats["wa"] += 1
+                    self._log(f"第 {n} 组：答案不一致（WA）")
+                    self._log(f"    正解输出：{out1[:200]!r}")
+                    self._log(f"    暴力输出：{out2[:200]!r}")
+                    self._save_fail(workdir)
+                    reason = "因出错中止"
+                    break
+
+                self._update_status(tested, total)
+        except Exception as e:
+            self._log(f"对拍线程发生未预期错误：{e!r}")
+            stats["error"] += 1
+            reason = "因出错中止"
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+            if not reason:
+                reason = "手动停止" if self.stop_event.is_set() else "正常完成"
+            self.stats = stats
+            self.tested = tested
+            self.finish_reason = reason
+            self._update_status(tested, total)
+            self.msg_queue.put(("finish", None))
+
+    def _handle_abnormal(self, r, which, n, workdir, stats, timeout):
+        """处理 TLE / 运行出错情况并保存现场。"""
+        if r["status"] == "tle":
+            stats["tle"] += 1
+            self._log(f"第 {n} 组：{which} 超时（TLE，>{timeout}s）")
+        else:
+            stats["error"] += 1
+            self._log(f"第 {n} 组：{which} 运行出错：{r['error']}")
+        self._save_fail(workdir)
+
+    def _save_fail(self, workdir):
+        """把失败现场（test.in / prog.out / std.out）复制到 ./fail/ 目录。"""
+        fail_dir = os.path.join(os.getcwd(), "fail")
+        try:
+            os.makedirs(fail_dir, exist_ok=True)
+        except OSError as e:
+            self._log(f"    无法创建 fail 目录：{e}")
+            return
+        idx = self._next_fail_index(fail_dir)
+        mapping = [("test.in", f"fail_{idx}.in"),
+                   ("prog.out", f"fail_{idx}_prog.out"),
+                   ("std.out", f"fail_{idx}_std.out")]
+        saved = []
+        for src, dst in mapping:
+            sp = os.path.join(workdir, src)
+            if os.path.exists(sp):
+                try:
+                    shutil.copy2(sp, os.path.join(fail_dir, dst))
+                    saved.append(dst)
+                except OSError:
+                    pass
+        self._log(f"    现场已保存到 {os.path.join(fail_dir, '')}"
+                  f"（{', '.join(saved)}）")
+
+    @staticmethod
+    def _next_fail_index(fail_dir):
+        """返回下一个可用的失败编号（避免覆盖）。"""
+        max_idx = 0
+        try:
+            for name in os.listdir(fail_dir):
+                m = re.match(r"^fail_(\d+)\.in$", name)
+                if m:
+                    max_idx = max(max_idx, int(m.group(1)))
+        except OSError:
+            pass
+        return max_idx + 1
+
+    # ------------------------------------------------------------------ #
+    # 主线程消息处理（队列轮询）
+    # ------------------------------------------------------------------ #
+    def _log(self, msg):
+        """后台线程安全地投递一条日志消息。"""
+        self.msg_queue.put(("log", msg))
+
+    def _update_status(self, tested, total):
+        """后台线程投递状态栏进度文本。"""
+        text = f"已测试：{tested}"
+        if total != -1:
+            text += f"/{total}"
+        self.msg_queue.put(("status", text))
+
+    def _poll_queue(self):
+        """主线程轮询消息队列并执行对应 UI 更新。"""
+        try:
+            while True:
+                kind, payload = self.msg_queue.get_nowait()
+                if kind == "log":
+                    self._insert_log(payload)
+                elif kind == "status":
+                    self.status_var.set(payload)
+                elif kind == "tryout":
+                    self._insert_tryout(payload)
+                elif kind == "finish":
+                    self._do_finish()
+        except queue.Empty:
+            pass
+        self._poll_id = self.after(100, self._poll_queue)
+
+    def _insert_tryout(self, text):
+        """把文本写入“试运行输出”区并滚入视野（只能在主线程调用）。"""
+        self.tryout_text.configure(state="normal")
+        self.tryout_text.delete("1.0", "end")
+        self.tryout_text.insert("1.0", text)
+        self.tryout_text.configure(state="disabled")
+        try:
+            y = self.tryout_head.winfo_rooty() - self.body_canvas.winfo_rooty()
+            self.body_canvas.yview_moveto(
+                max(0.0, y / max(1, self.body_canvas.winfo_height())))
+        except Exception:
+            pass
+
+    def _insert_log(self, msg):
+        """向日志框追加一行（只能在主线程调用）。"""
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", time.strftime("[%H:%M:%S] ") + msg + "\n")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def _do_finish(self):
+        """对拍结束后恢复按钮状态并输出统计（主线程）。"""
+        self.running = False
+        self.btn_start.config(state="normal")
+        self.btn_stop.config(state="disabled")
+        s = self.stats
+        errs = s["re"] + s["error"]
+        self._insert_log("-" * 60)
+        self._insert_log(f"对拍结束（{self.finish_reason}）：共测试 {self.tested} 组")
+        self._insert_log(
+            f"  通过：{s['pass']}    不一致(WA)：{s['wa']}    "
+            f"超时(TLE)：{s['tle']}    运行错误(RE/Error)：{errs}")
+
+    # ------------------------------------------------------------------ #
+    # 窗口关闭
+    # ------------------------------------------------------------------ #
+    def _on_close(self):
+        """关闭窗口：先请求停止对拍、保存状态，再等待线程结束。"""
+        self.stop_event.set()
+        if self.worker and self.worker.is_alive():
+            self.worker.join(timeout=15)
+        if self._poll_id is not None:
+            try:
+                self.after_cancel(self._poll_id)
+            except Exception:
+                pass
+            self._poll_id = None
+        self._save_state()
+        self.destroy()
+
+
+def main():
+    """程序入口：创建主窗口并启动事件循环。"""
+    app = Application()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
