@@ -1,0 +1,14 @@
+# 批处理脚本在 Windows 上必须用 CRLF，否则 cmd 无法解析（导致双击无响应）
+*.bat text eol=crlf
+
+# 文本文件统一 LF（含 *.sh，避免在 Linux/macOS 出问题）
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+
+# 二进制文件
+*.ico binary
+*.png binary
+*.exe binary

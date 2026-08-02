@@ -82,6 +82,11 @@ python duipai.py
 Windows 打包版：运行 `build.bat` 生成 `dist/对拍机.exe`（无控制台，双击运行）。
 打包产物不入库，见下方「仓库说明」。
 
+> **双击 `build.bat` 无反应？** 这是批处理换行符问题：Windows cmd 无法解析 LF 换行的
+> `.bat`。用 `git clone` 获取不会有此问题（`.gitattributes` 已固定 CRLF）；若用网页
+> "Download ZIP"，先用记事本打开 `build.bat` → "文件 → 另存为"，编码选 UTF-8、
+> 换行选 CRLF（或 Windows (CRLF)）再运行，或直接用 `python duipai.py`。
+
 ---
 
 ## 使用步骤
