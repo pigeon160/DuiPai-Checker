@@ -1,5 +1,7 @@
 # 竞赛对拍机（DuiPai Checker）
 
+GitHub：[pigeon160/DuiPai-Checker](https://github.com/pigeon160/DuiPai-Checker)
+
 图形化对拍工具：用随机数据反复运行“正解”与“暴力”两份程序并比较输出，自动找出
 **WA（答案不一致）/ TLE（超时）/ RE（运行错误）** 反例，并保存现场供分析。
 
@@ -77,7 +79,8 @@
 python duipai.py
 ```
 
-Windows 打包版：`dist/对拍机.exe`（无控制台，双击运行）。
+Windows 打包版：运行 `build.bat` 生成 `dist/对拍机.exe`（无控制台，双击运行）。
+打包产物不入库，见下方「仓库说明」。
 
 ---
 
@@ -110,10 +113,23 @@ duipai.py        主程序（单文件，纯标准库）
 make_icon.py     生成应用图标 app.png / app.ico
 build.bat        Windows 打包脚本（PyInstaller --noconsole --onefile）
 build.sh         Linux / macOS 打包脚本
+.gitignore       排除构建/运行产物（见下方「仓库说明」）
 app.png / app.ico  应用图标
-dist/对拍机.exe    打包产物
-fail/            对拍失败现场（运行后自动生成）
 ```
+
+> `dist/`、`fail/`、`duipai_state.json` 等由构建/运行生成，已由 `.gitignore`
+> 排除，不入库。
+
+---
+
+## 仓库说明
+
+- **只提交源码与文档**：构建产物（`dist/`）、对拍失败现场（`fail/`）、折叠状态
+  （`duipai_state.json`）、`__pycache__`、`.spec` 等均在 `.gitignore` 中排除。
+- **从 GitHub 获取**：`git clone https://github.com/pigeon160/DuiPai-Checker.git`
+- **运行源码**：`python duipai.py`（无需安装依赖）。
+- **自行打包**：Windows 跑 `build.bat`，Linux/macOS 跑 `build.sh`，
+  产物生成到本地 `dist/`，不会被 Git 跟踪。
 
 ---
 
