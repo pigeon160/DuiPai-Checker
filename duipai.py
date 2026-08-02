@@ -47,8 +47,12 @@ _DSL_EMPTY_HINT = """\
 # 当前无变量。
 # 在上方点击“+ 整数变量”等添加，或在下方直接输入 DSL 脚本后点“应用（转为图形化）”。
 # 示例：
-#   n = int(1, 100)
-#   a = ints(n, 1, 9)
+#   n  = int(1, 100)
+#   a  = ints(n, 1, 9)
+#   t  = int(1, 3)
+#   group(t):           # 缩进块内语句重复 t 次
+#       x = int(1, 10)
+#       s = str(x, "01")
 """
 
 _DSL_HELP = """\
@@ -72,12 +76,24 @@ _DSL_HELP = """\
     M  = matrix(3, n, 0, 1)       # 数组：3 行 × n 列整数（多行）
     p  = perm(n)                  # 排列：一行 1..n 随机排列
     t  = tree(n)                  # 树：首行 n + n-1 条边，无边权
-    t2 = tree(n, int(1, 10))      # 树 + 整数边权
-    t3 = tree(n, float(0, 1, 4))  # 树 + 浮点边权
-    g  = graph(n, m, 1, 0, int(1,10))  # 图：n 顶点 m 边（3/4位为有向/连通）
+    t2 = tree(n, w=int(1, 10))    # 树 + 整数边权
+    t3 = tree(n, w=float(0, 1, 4))# 树 + 浮点边权
+    t4 = tree(n, w=int(1,5), val=int(1,9))  # 树 + 节点权值
+    g  = graph(n, m, 1, 0, w=int(1,10))     # 图：n 顶点 m 边（3/4位为有向/连通）
+    g2 = graph(n, m, 1, 0, type="dag")      # 有向无环图
+    g3 = graph(n, m, 0, 1, type="bipartite")# 二分图
+    r  = ring(n)                  # 环：n 条边首尾相连
+    br = base_ring(n, k)          # 基环树：n 顶点，环大小 k
+    s  = str(n, "ab")             # 字符串：一行 n 个字符（字符集可省）
+    M  = strs(2, n, "01")         # 字符网格：2 行 × n 列
+    z  = binseq(n, k)             # 0/1 序列：n 位，恰好 k 个 1
+    iv = intervals(n, 1, 100)     # 区间：n 行，每行 l r
+    pt = points(n, 1, 10, 1, 10)  # 点集：n 行，每行 x y
 
-引用规则：只能引用前面定义的名字；数组（ints/floats/matrix/matf）
-不能被引用；perm/tree/graph 可被引用，取其规模值。
+引用规则：只能引用前面定义的名字；数组/字符串/序列等不可被引用；
+perm/tree/graph 被引用时取其规模值。
+多组测试：点“+ 重复组”按钮图形化配置，或在 DSL 用 group(次数表达式): 加缩进块，
+块内语句随次数重复（每轮独立随机）。
 """
 
 
@@ -85,12 +101,16 @@ class VariableRow:
     """内置生成器中的一个变量条目（一行或多行 UI）。"""
 
     KIND_NAMES = {"int": "整数", "float": "浮点数", "array": "数组",
-                  "perm": "排列", "tree": "树", "graph": "图"}
+                  "perm": "排列", "tree": "树", "graph": "图",
+                  "string": "字符串", "binseq": "0/1序列",
+                  "intervals": "区间", "points": "点集"}
 
-    def __init__(self, parent, kind, app):
+    def __init__(self, parent, kind, app, parent_group=None):
         self.kind = kind          # 'int'/'float'/'array'/'perm'/'tree'/'graph'
         self.app = app
         self.name = ""            # DSL 变量名（GUI 自动生成时为空，快照时补全）
+        self.parent_group = parent_group   # 所属 group 行（None 表示顶层）
+        self.children = []        # group 行的子变量行列表
         self._extra_sources = {}  # attr -> [(显示文本, 表达式字符串), ...]
         self.frame = tk.Frame(parent, relief="ridge", bd=1)
         self._build()
@@ -98,26 +118,29 @@ class VariableRow:
     def _build_source(self, f, row, col, label, attr, refs_attr, entries,
                       defaults):
         """放置一个“随机范围/引用变量”来源控件组，返回下一个可用列号。"""
-        ttk.Label(f, text=label).grid(row=row, column=col, padx=(6, 0))
+        _p = {"pady": (3, 3)}
+        lbl = ttk.Label(f, text=label)
+        lbl.grid(row=row, column=col, padx=(6, 0), **_p)
+        setattr(self, attr + "_label", lbl)
         col += 1
         var = tk.StringVar(value="随机范围")
         setattr(self, attr + "_var", var)
-        cb = ttk.Combobox(f, textvariable=var, values=["随机范围"], width=14,
+        cb = ttk.Combobox(f, textvariable=var, values=["随机范围"], width=9,
                           state="readonly")
         setattr(self, attr, cb)
         setattr(self, refs_attr, [])          # [(显示文本, VariableRow), ...]
-        cb.grid(row=row, column=col, padx=2)
+        cb.grid(row=row, column=col, padx=2, **_p)
         cb.bind("<<ComboboxSelected>>",
                 lambda e: self._apply_source_state(var, entries))
         col += 1
         for ename, dflt in zip(entries, defaults):
-            en = ttk.Entry(f, width=5)
+            en = ttk.Entry(f, width=4)
             en.insert(0, dflt)
             setattr(self, ename, en)
-            en.grid(row=row, column=col, padx=2)
+            en.grid(row=row, column=col, padx=1, **_p)
             col += 1
             if ename.endswith("_max"):
-                ttk.Label(f, text="~").grid(row=row, column=col, padx=2)
+                ttk.Label(f, text="~").grid(row=row, column=col, padx=1, **_p)
                 col += 1
         return col
 
@@ -144,56 +167,92 @@ class VariableRow:
                 return row
         return None
 
+    def _type_label(self, f, text, row, rowspan=1):
+        """创建行首的折叠按钮 + 类型标签容器（放在 column=0）。
+
+        折叠按钮在最前，点击折叠/展开该行；折叠时隐藏主体控件。"""
+        container = tk.Frame(f, bg=self.frame.cget("bg"))
+        container.grid(row=row, column=0, rowspan=rowspan, padx=(2, 0),
+                       sticky="ns")
+        self._fold_btn = ttk.Button(container, text="▾", width=2,
+                                    command=self._toggle_collapse)
+        self._fold_btn.pack(side="left", padx=(0, 2), pady=2)
+        ttk.Label(container, text=text, width=10, style="Tag.TLabel").pack(
+            side="left", padx=(0, 4))
+        self.collapsed = False
+        self._body_widgets = []   # 折叠时隐藏的主体控件
+        return container
+
+    def _toggle_collapse(self):
+        """折叠/展开变量行（隐藏或恢复主体控件）。"""
+        self.collapsed = not self.collapsed
+        self._fold_btn.configure(text="▸" if self.collapsed else "▾")
+        if self.collapsed:
+            for w in self._body_widgets:
+                try:
+                    w.grid_remove()
+                except tk.TclError:
+                    pass
+        else:
+            for w in self._body_widgets:
+                try:
+                    w.grid()
+                except tk.TclError:
+                    pass
+        self.app._refresh_sources()
+        self.app._fit_var_inner_size()
+        if self.kind == "group":
+            self.app._fit_group_canvas(self)
+
     def _build(self):
         f = self.frame
         if self.kind == "int":
-            ttk.Label(f, text="整数变量", width=10, style="Tag.TLabel").grid(row=0, column=0, padx=4)
-            ttk.Label(f, text="最小值:").grid(row=0, column=1, padx=(4, 0))
+            self._type_label(f, "整数变量", 0)
+            ttk.Label(f, text="最小值:").grid(row=0, column=1, padx=(4, 0), pady=(3, 3))
             self.min_entry = ttk.Entry(f, width=8)
             self.min_entry.insert(0, "1")
-            self.min_entry.grid(row=0, column=2, padx=2)
-            ttk.Label(f, text="最大值:").grid(row=0, column=3, padx=(6, 0))
+            self.min_entry.grid(row=0, column=2, padx=2, pady=(3, 3))
+            ttk.Label(f, text="最大值:").grid(row=0, column=3, padx=(6, 0), pady=(3, 3))
             self.max_entry = ttk.Entry(f, width=8)
             self.max_entry.insert(0, "100")
-            self.max_entry.grid(row=0, column=4, padx=2)
+            self.max_entry.grid(row=0, column=4, padx=2, pady=(3, 3))
             btn_col, row_span = 5, 1
         elif self.kind == "float":
-            ttk.Label(f, text="浮点数变量", width=10, style="Tag.TLabel").grid(row=0, column=0, padx=4)
-            ttk.Label(f, text="最小值:").grid(row=0, column=1, padx=(4, 0))
+            self._type_label(f, "浮点数变量", 0)
+            ttk.Label(f, text="最小值:").grid(row=0, column=1, padx=(4, 0), pady=(3, 3))
             self.min_entry = ttk.Entry(f, width=8)
             self.min_entry.insert(0, "0.0")
-            self.min_entry.grid(row=0, column=2, padx=2)
-            ttk.Label(f, text="最大值:").grid(row=0, column=3, padx=(6, 0))
+            self.min_entry.grid(row=0, column=2, padx=2, pady=(3, 3))
+            ttk.Label(f, text="最大值:").grid(row=0, column=3, padx=(6, 0), pady=(3, 3))
             self.max_entry = ttk.Entry(f, width=8)
             self.max_entry.insert(0, "1.0")
-            self.max_entry.grid(row=0, column=4, padx=2)
-            ttk.Label(f, text="精度:").grid(row=0, column=5, padx=(6, 0))
+            self.max_entry.grid(row=0, column=4, padx=2, pady=(3, 3))
+            ttk.Label(f, text="精度:").grid(row=0, column=5, padx=(6, 0), pady=(3, 3))
             self.prec_entry = ttk.Entry(f, width=3)
             self.prec_entry.insert(0, "6")
-            self.prec_entry.grid(row=0, column=6, padx=2)
+            self.prec_entry.grid(row=0, column=6, padx=2, pady=(3, 3))
             btn_col, row_span = 7, 1
         elif self.kind == "array":   # 两行：第1行元素配置，第2行行数/每行长度
-            ttk.Label(f, text="数组变量", width=10, style="Tag.TLabel").grid(
-                row=0, column=0, rowspan=2, padx=4, sticky="ns")
-            ttk.Label(f, text="元素:").grid(row=0, column=1, padx=(4, 0))
+            self._type_label(f, "数组变量", 0, rowspan=2)
+            ttk.Label(f, text="元素:").grid(row=0, column=1, padx=(4, 0), pady=(3, 3))
             self.elem_type = ttk.Combobox(f, values=["整数", "浮点数"],
                                           width=5, state="readonly")
             self.elem_type.current(0)
-            self.elem_type.grid(row=0, column=2, padx=2)
+            self.elem_type.grid(row=0, column=2, padx=2, pady=(3, 3))
             self.elem_type.bind("<<ComboboxSelected>>", self._toggle_elem_type)
-            ttk.Label(f, text="范围:").grid(row=0, column=3, padx=(6, 0))
-            self.el_min = ttk.Entry(f, width=6)
+            ttk.Label(f, text="范围:").grid(row=0, column=3, padx=(6, 0), pady=(3, 3))
+            self.el_min = ttk.Entry(f, width=5)
             self.el_min.insert(0, "1")
-            self.el_min.grid(row=0, column=4, padx=2)
-            ttk.Label(f, text="~").grid(row=0, column=5)
-            self.el_max = ttk.Entry(f, width=6)
+            self.el_min.grid(row=0, column=4, padx=2, pady=(3, 3))
+            ttk.Label(f, text="~").grid(row=0, column=5, pady=(3, 3))
+            self.el_max = ttk.Entry(f, width=5)
             self.el_max.insert(0, "100")
-            self.el_max.grid(row=0, column=6, padx=2)
+            self.el_max.grid(row=0, column=6, padx=2, pady=(3, 3))
             self.prec_label = ttk.Label(f, text="精度:")
             self.prec_entry = ttk.Entry(f, width=3)
             self.prec_entry.insert(0, "6")
-            self.prec_label.grid(row=0, column=7, padx=(6, 0))
-            self.prec_entry.grid(row=0, column=8, padx=2)
+            self.prec_label.grid(row=0, column=7, padx=(6, 0), pady=(3, 3))
+            self.prec_entry.grid(row=0, column=8, padx=2, pady=(3, 3))
 
             col = self._build_source(f, 1, 1, "行数:", "rows_source",
                                      "_rows_refs", ["rows_min", "rows_max"],
@@ -204,46 +263,167 @@ class VariableRow:
             self._toggle_elem_type()
             btn_col, row_span = col, 2
         elif self.kind == "perm":
-            ttk.Label(f, text="排列变量", width=10, style="Tag.TLabel").grid(
-                row=0, column=0, padx=4)
+            self._type_label(f, "排列变量", 0)
             col = self._build_source(f, 0, 1, "长度n:", "n_source",
                                      "_n_refs", ["n_min", "n_max"],
                                      ["1", "10"])
             btn_col, row_span = col, 1
+        elif self.kind == "string":
+            # 两行：第1行长度来源，第2行行数/字符集
+            self._type_label(f, "字符串变量", 0, rowspan=2)
+            col = self._build_source(f, 0, 1, "长度:", "len_source",
+                                     "_len_refs", ["len_min", "len_max"],
+                                     ["1", "10"])
+            col = self._build_source(f, 1, 1, "行数:", "rows_source",
+                                     "_rows_refs", ["rows_min", "rows_max"],
+                                     ["1", "1"])
+            ttk.Label(f, text="字符集:").grid(row=1, column=col, padx=(6, 0), pady=(3, 3))
+            self.charset_entry = ttk.Entry(f, width=12)
+            self.charset_entry.insert(0, "abcdefghijklmnopqrstuvwxyz")
+            self.charset_entry.grid(row=1, column=col + 1, padx=2, pady=(3, 3))
+            btn_col, row_span = col + 2, 2
+        elif self.kind == "binseq":
+            self._type_label(f, "0/1序列", 0, rowspan=2)
+            col = self._build_source(f, 0, 1, "长度n:", "n_source",
+                                     "_n_refs", ["n_min", "n_max"],
+                                     ["1", "10"])
+            col = self._build_source(f, 1, 1, "1的个数k:", "k_source",
+                                     "_k_refs", ["k_min", "k_max"],
+                                     ["1", "5"])
+            btn_col, row_span = col, 2
+        elif self.kind == "intervals":
+            self._type_label(f, "区间", 0)
+            col = self._build_source(f, 0, 1, "个数n:", "n_source",
+                                     "_n_refs", ["n_min", "n_max"],
+                                     ["1", "10"])
+            ttk.Label(f, text="范围:").grid(row=0, column=col, padx=(6, 0), pady=(3, 3))
+            self.iv_lo = ttk.Entry(f, width=5)
+            self.iv_lo.insert(0, "1")
+            self.iv_lo.grid(row=0, column=col + 1, padx=2, pady=(3, 3))
+            ttk.Label(f, text="~").grid(row=0, column=col + 2, pady=(3, 3))
+            self.iv_hi = ttk.Entry(f, width=5)
+            self.iv_hi.insert(0, "100")
+            self.iv_hi.grid(row=0, column=col + 3, padx=2, pady=(3, 3))
+            btn_col, row_span = col + 4, 1
+        elif self.kind == "points":
+            self._type_label(f, "点集", 0, rowspan=2)
+            col = self._build_source(f, 0, 1, "个数n:", "n_source",
+                                     "_n_refs", ["n_min", "n_max"],
+                                     ["1", "10"])
+            ttk.Label(f, text="x:").grid(row=1, column=1, padx=(6, 0), pady=(3, 3))
+            self.pt_xlo = ttk.Entry(f, width=5)
+            self.pt_xlo.insert(0, "1")
+            self.pt_xlo.grid(row=1, column=2, padx=2, pady=(3, 3))
+            ttk.Label(f, text="~").grid(row=1, column=3, pady=(3, 3))
+            self.pt_xhi = ttk.Entry(f, width=5)
+            self.pt_xhi.insert(0, "100")
+            self.pt_xhi.grid(row=1, column=4, padx=2, pady=(3, 3))
+            ttk.Label(f, text="y:").grid(row=1, column=5, padx=(6, 0), pady=(3, 3))
+            self.pt_ylo = ttk.Entry(f, width=5)
+            self.pt_ylo.insert(0, "1")
+            self.pt_ylo.grid(row=1, column=6, padx=2, pady=(3, 3))
+            ttk.Label(f, text="~").grid(row=1, column=7, pady=(3, 3))
+            self.pt_yhi = ttk.Entry(f, width=5)
+            self.pt_yhi.insert(0, "100")
+            self.pt_yhi.grid(row=1, column=8, padx=2, pady=(3, 3))
+            btn_col, row_span = max(col, 9), 2
+        elif self.kind == "group":
+            # 可编辑重复组：次数来源 + 组内子变量列表
+            self._type_label(f, "重复组", 0, rowspan=2)
+            col = self._build_source(f, 0, 1, "次数:", "times_source",
+                                     "_times_refs", ["times_min", "times_max"],
+                                     ["1", "3"])
+            # 组内添加子变量按钮
+            ttk.Label(f, text="组内添加:").grid(row=1, column=1, padx=(6, 0), pady=(3, 3))
+            col = 2
+            for k, lbl in (("int", "整数"), ("float", "浮点数"), ("array", "数组"),
+                           ("string", "字符串"), ("perm", "排列"), ("tree", "树"),
+                           ("graph", "图"), ("binseq", "0/1"),
+                           ("intervals", "区间"), ("points", "点")):
+                b = ttk.Button(f, text=lbl, width=3,
+                               command=lambda k=k: self.app._add_var(k, self))
+                b.grid(row=1, column=col, padx=1, pady=(3, 3))
+                setattr(self, f"add_{k}", b)
+                col += 1
+            # 组内子变量容器：Canvas + 横向滚动条（子行超宽时可横滚）
+            self.group_scroll = ttk.Frame(f)
+            self.group_scroll.grid(row=2, column=1, columnspan=max(col, 8),
+                                   sticky="ew", padx=(6, 4), pady=(4, 0))
+            self.group_canvas = tk.Canvas(self.group_scroll,
+                                          highlightthickness=0, height=40,
+                                          yscrollincrement=1)
+            self.group_hbar = ttk.Scrollbar(self.group_scroll, orient="horizontal",
+                                            command=self.group_canvas.xview)
+            self.group_canvas.configure(xscrollcommand=self.group_hbar.set)
+            self.group_canvas.pack(side="top", fill="x")
+            self.group_hbar.pack(side="bottom", fill="x")
+            self.group_inner = ttk.Frame(self.group_canvas)
+            self._group_win_id = self.group_canvas.create_window(
+                (0, 0), window=self.group_inner, anchor="nw")
+            self.group_inner.bind(
+                "<Configure>",
+                lambda e, gr=self: self.app._on_group_inner_configure(gr))
+            self.group_canvas.bind(
+                "<Configure>",
+                lambda e, gr=self: self.app._fit_group_canvas(gr))
+            self.frame.columnconfigure(1, weight=1)
+            btn_col, row_span = col, 3
         elif self.kind == "tree":
-            ttk.Label(f, text="树变量", width=10, style="Tag.TLabel").grid(
-                row=0, column=0, rowspan=2, padx=4, sticky="ns")
+            self._type_label(f, "树变量", 0, rowspan=2)
             col = self._build_source(f, 0, 1, "顶点数n:", "n_source",
                                      "_n_refs", ["n_min", "n_max"],
                                      ["2", "8"])
             # 第2行：边权
-            ttk.Label(f, text="边权:").grid(row=1, column=1, padx=(6, 0))
+            ttk.Label(f, text="边权:").grid(row=1, column=1, padx=(6, 0), pady=(3, 3))
             self.w_mode_var = tk.StringVar(value="无")
             self.w_mode = ttk.Combobox(f, textvariable=self.w_mode_var,
-                                       values=["无", "整数", "浮点"], width=5,
+                                       values=["无", "整数", "浮点"], width=4,
                                        state="readonly")
-            self.w_mode.grid(row=1, column=2, padx=2)
+            self.w_mode.grid(row=1, column=2, padx=2, pady=(3, 3))
             self.w_mode.bind("<<ComboboxSelected>>", self._toggle_w_mode)
             self.w_range_label = ttk.Label(f, text="范围:")
-            self.w_range_label.grid(row=1, column=3, padx=(6, 0))
-            self.w_min = ttk.Entry(f, width=6)
+            self.w_range_label.grid(row=1, column=3, padx=(6, 0), pady=(3, 3))
+            self.w_min = ttk.Entry(f, width=4)
             self.w_min.insert(0, "1")
-            self.w_min.grid(row=1, column=4, padx=2)
+            self.w_min.grid(row=1, column=4, padx=2, pady=(3, 3))
             self.w_tilde = ttk.Label(f, text="~")
-            self.w_tilde.grid(row=1, column=5)
-            self.w_max = ttk.Entry(f, width=6)
+            self.w_tilde.grid(row=1, column=5, pady=(3, 3))
+            self.w_max = ttk.Entry(f, width=4)
             self.w_max.insert(0, "10")
-            self.w_max.grid(row=1, column=6, padx=2)
+            self.w_max.grid(row=1, column=6, padx=2, pady=(3, 3))
             self.w_prec_label = ttk.Label(f, text="精度:")
             self.w_prec = ttk.Entry(f, width=3)
             self.w_prec.insert(0, "6")
-            self.w_prec_label.grid(row=1, column=7, padx=(6, 0))
-            self.w_prec.grid(row=1, column=8, padx=2)
+            self.w_prec_label.grid(row=1, column=7, padx=(6, 0), pady=(3, 3))
+            self.w_prec.grid(row=1, column=8, padx=2, pady=(3, 3))
             self._toggle_w_mode()
-            btn_col, row_span = 9, 2
+            # 第3行：节点权值
+            ttk.Label(f, text="节点权值:").grid(row=2, column=1, padx=(6, 0), pady=(3, 3))
+            self.v_mode_var = tk.StringVar(value="无")
+            self.v_mode = ttk.Combobox(f, textvariable=self.v_mode_var,
+                                       values=["无", "整数", "浮点"], width=4,
+                                       state="readonly")
+            self.v_mode.grid(row=2, column=2, padx=2, pady=(3, 3))
+            self.v_mode.bind("<<ComboboxSelected>>", self._toggle_v_mode)
+            self.v_range_label = ttk.Label(f, text="范围:")
+            self.v_range_label.grid(row=2, column=3, padx=(6, 0), pady=(3, 3))
+            self.v_min = ttk.Entry(f, width=4)
+            self.v_min.insert(0, "1")
+            self.v_min.grid(row=2, column=4, padx=2, pady=(3, 3))
+            self.v_tilde = ttk.Label(f, text="~")
+            self.v_tilde.grid(row=2, column=5, pady=(3, 3))
+            self.v_max = ttk.Entry(f, width=4)
+            self.v_max.insert(0, "10")
+            self.v_max.grid(row=2, column=6, padx=2, pady=(3, 3))
+            self.v_prec_label = ttk.Label(f, text="精度:")
+            self.v_prec = ttk.Entry(f, width=3)
+            self.v_prec.insert(0, "6")
+            self.v_prec_label.grid(row=2, column=7, padx=(6, 0), pady=(3, 3))
+            self.v_prec.grid(row=2, column=8, padx=2, pady=(3, 3))
+            self._toggle_v_mode()
+            btn_col, row_span = 9, 3
         elif self.kind == "graph":
-            ttk.Label(f, text="图变量", width=10, style="Tag.TLabel").grid(
-                row=0, column=0, rowspan=2, padx=4, sticky="ns")
+            self._type_label(f, "图变量", 0, rowspan=3)
             col = self._build_source(f, 0, 1, "顶点数n:", "n_source",
                                      "_n_refs", ["n_min", "n_max"],
                                      ["2", "6"])
@@ -251,42 +431,74 @@ class VariableRow:
                                      "_m_refs", ["m_min", "m_max"],
                                      ["2", "6"])
             # 第2行：类型 / 连通 / 边权
-            ttk.Label(f, text="类型:").grid(row=1, column=1, padx=(6, 0))
+            ttk.Label(f, text="类型:").grid(row=1, column=1, padx=(6, 0), pady=(3, 3))
             self.g_dir_var = tk.StringVar(value="无向")
             g_dir = ttk.Combobox(f, textvariable=self.g_dir_var,
-                                 values=["无向", "有向"], width=5,
+                                 values=["无向", "有向"], width=4,
                                  state="readonly")
-            g_dir.grid(row=1, column=2, padx=2)
-            ttk.Label(f, text="连通:").grid(row=1, column=3, padx=(6, 0))
+            g_dir.grid(row=1, column=2, padx=2, pady=(3, 3))
+            ttk.Label(f, text="连通:").grid(row=1, column=3, padx=(6, 0), pady=(3, 3))
             self.g_conn_var = tk.StringVar(value="任意")
             g_conn = ttk.Combobox(f, textvariable=self.g_conn_var,
-                                  values=["任意", "连通"], width=5,
+                                  values=["任意", "连通"], width=4,
                                   state="readonly")
-            g_conn.grid(row=1, column=4, padx=2)
-            ttk.Label(f, text="边权:").grid(row=1, column=5, padx=(6, 0))
+            g_conn.grid(row=1, column=4, padx=2, pady=(3, 3))
+            ttk.Label(f, text="结构:").grid(row=1, column=5, padx=(6, 0), pady=(3, 3))
+            self.g_type_var = tk.StringVar(value="一般")
+            g_type = ttk.Combobox(f, textvariable=self.g_type_var,
+                                  values=["一般", "二分图", "DAG", "环", "基环树"],
+                                  width=5, state="readonly")
+            g_type.grid(row=1, column=6, padx=2, pady=(3, 3))
+            g_type.bind("<<ComboboxSelected>>", self._toggle_g_type)
+            ttk.Label(f, text="边权:").grid(row=1, column=7, padx=(6, 0), pady=(3, 3))
             self.w_mode_var = tk.StringVar(value="无")
             self.w_mode = ttk.Combobox(f, textvariable=self.w_mode_var,
-                                       values=["无", "整数", "浮点"], width=5,
+                                       values=["无", "整数", "浮点"], width=4,
                                        state="readonly")
-            self.w_mode.grid(row=1, column=6, padx=2)
+            self.w_mode.grid(row=1, column=8, padx=2, pady=(3, 3))
             self.w_mode.bind("<<ComboboxSelected>>", self._toggle_w_mode)
             self.w_range_label = ttk.Label(f, text="范围:")
-            self.w_range_label.grid(row=1, column=7, padx=(6, 0))
-            self.w_min = ttk.Entry(f, width=6)
+            self.w_range_label.grid(row=1, column=9, padx=(6, 0), pady=(3, 3))
+            self.w_min = ttk.Entry(f, width=4)
             self.w_min.insert(0, "1")
-            self.w_min.grid(row=1, column=8, padx=2)
+            self.w_min.grid(row=1, column=10, padx=2, pady=(3, 3))
             self.w_tilde = ttk.Label(f, text="~")
-            self.w_tilde.grid(row=1, column=9)
-            self.w_max = ttk.Entry(f, width=6)
+            self.w_tilde.grid(row=1, column=11, pady=(3, 3))
+            self.w_max = ttk.Entry(f, width=4)
             self.w_max.insert(0, "10")
-            self.w_max.grid(row=1, column=10, padx=2)
+            self.w_max.grid(row=1, column=12, padx=2, pady=(3, 3))
             self.w_prec_label = ttk.Label(f, text="精度:")
             self.w_prec = ttk.Entry(f, width=3)
             self.w_prec.insert(0, "6")
-            self.w_prec_label.grid(row=1, column=11, padx=(6, 0))
-            self.w_prec.grid(row=1, column=12, padx=2)
+            self.w_prec_label.grid(row=1, column=13, padx=(6, 0), pady=(3, 3))
+            self.w_prec.grid(row=1, column=14, padx=2, pady=(3, 3))
             self._toggle_w_mode()
-            btn_col, row_span = 13, 2
+            # 第3行：节点权值
+            ttk.Label(f, text="节点权值:").grid(row=2, column=1, padx=(6, 0), pady=(3, 3))
+            self.v_mode_var = tk.StringVar(value="无")
+            self.v_mode = ttk.Combobox(f, textvariable=self.v_mode_var,
+                                       values=["无", "整数", "浮点"], width=4,
+                                       state="readonly")
+            self.v_mode.grid(row=2, column=2, padx=2, pady=(3, 3))
+            self.v_mode.bind("<<ComboboxSelected>>", self._toggle_v_mode)
+            self.v_range_label = ttk.Label(f, text="范围:")
+            self.v_range_label.grid(row=2, column=3, padx=(6, 0), pady=(3, 3))
+            self.v_min = ttk.Entry(f, width=4)
+            self.v_min.insert(0, "1")
+            self.v_min.grid(row=2, column=4, padx=2, pady=(3, 3))
+            self.v_tilde = ttk.Label(f, text="~")
+            self.v_tilde.grid(row=2, column=5, pady=(3, 3))
+            self.v_max = ttk.Entry(f, width=4)
+            self.v_max.insert(0, "10")
+            self.v_max.grid(row=2, column=6, padx=2, pady=(3, 3))
+            self.v_prec_label = ttk.Label(f, text="精度:")
+            self.v_prec = ttk.Entry(f, width=3)
+            self.v_prec.insert(0, "6")
+            self.v_prec_label.grid(row=2, column=7, padx=(6, 0), pady=(3, 3))
+            self.v_prec.grid(row=2, column=8, padx=2, pady=(3, 3))
+            self._toggle_v_mode()
+            self._toggle_g_type()
+            btn_col, row_span = 15, 3
 
         # 右侧按钮：上移 / 下移 / 删除
         ttk.Button(f, text="▲", width=3,
@@ -298,6 +510,24 @@ class VariableRow:
         ttk.Button(f, text="✕", width=3,
                    command=lambda: self.app.delete_row(self)).grid(
             row=0, column=btn_col + 2, rowspan=row_span, padx=2, sticky="ns")
+
+        # 收集主体控件（折叠时隐藏 column>=1 的控件与 group 子容器）
+        self._body_widgets = []
+        for child in f.winfo_children():
+            try:
+                info = child.grid_info()
+            except tk.TclError:
+                continue
+            if not info:
+                continue
+            if child is getattr(self, "_fold_btn", None) or \
+                    child is self._fold_btn.master:
+                continue
+            col = info.get("column", 0)
+            if col >= 1:
+                self._body_widgets.append(child)
+        if self.kind == "group":
+            self._body_widgets.append(self.group_scroll)
 
     def _toggle_elem_type(self, event=None):
         """根据数组元素类型，显示或隐藏精度输入框。"""
@@ -331,6 +561,67 @@ class VariableRow:
                 self.w_prec_label.grid_remove()
                 self.w_prec.grid_remove()
 
+    def _toggle_v_mode(self, event=None):
+        """根据节点权值模式显示/隐藏范围与精度输入框。"""
+        mode = self.v_mode_var.get()
+        if mode == "无":
+            self.v_range_label.grid_remove()
+            self.v_min.grid_remove()
+            self.v_tilde.grid_remove()
+            self.v_max.grid_remove()
+            self.v_prec_label.grid_remove()
+            self.v_prec.grid_remove()
+        else:
+            self.v_range_label.grid()
+            self.v_min.grid()
+            self.v_tilde.grid()
+            self.v_max.grid()
+            if mode == "浮点":
+                self.v_prec_label.grid()
+                self.v_prec.grid()
+            else:
+                self.v_prec_label.grid_remove()
+                self.v_prec.grid_remove()
+
+    def _toggle_g_type(self, event=None):
+        """根据图结构类型显示/隐藏边数 m 与环大小输入。"""
+        t = self.g_type_var.get()
+        if t == "环":
+            self.m_source_label.grid_remove()
+            self.m_source.grid_remove()
+            if hasattr(self, "k_label"):
+                self.k_label.grid_remove()
+                self.k_min.grid_remove()
+                self.k_tilde.grid_remove()
+                self.k_max.grid_remove()
+        elif t == "基环树":
+            self.m_source_label.grid_remove()
+            self.m_source.grid_remove()
+            if not hasattr(self, "k_label"):
+                self.k_label = ttk.Label(self.frame, text="环大小k:")
+                self.k_label.grid(row=2, column=9, padx=(6, 0))
+                self.k_min = ttk.Entry(self.frame, width=4)
+                self.k_min.insert(0, "3")
+                self.k_min.grid(row=2, column=10, padx=2)
+                self.k_tilde = ttk.Label(self.frame, text="~")
+                self.k_tilde.grid(row=2, column=11)
+                self.k_max = ttk.Entry(self.frame, width=4)
+                self.k_max.insert(0, "6")
+                self.k_max.grid(row=2, column=12, padx=2)
+            else:
+                self.k_label.grid()
+                self.k_min.grid()
+                self.k_tilde.grid()
+                self.k_max.grid()
+        else:
+            if hasattr(self, "k_label"):
+                self.k_label.grid_remove()
+                self.k_min.grid_remove()
+                self.k_tilde.grid_remove()
+                self.k_max.grid_remove()
+            self.m_source_label.grid()
+            self.m_source.grid()
+
 
 class Application(tk.Tk):
     """主窗口：负责 UI 构建与对拍核心逻辑。"""
@@ -338,8 +629,8 @@ class Application(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("竞赛对拍机")
-        self.geometry("1024x780")
-        self.minsize(820, 600)
+        self.geometry("1180x800")
+        self.minsize(900, 620)
 
         self.rows = []                 # 内置生成器的变量条目列表
         self._scroll_regions = []      # 自滚动区域（滚轮滚动链），构建时填充
@@ -552,9 +843,9 @@ class Application(tk.Tk):
         self.status_label.pack(fill="x", pady=(6, 0))
 
         # “自滚动区域”：整页滚轮在这些区域内不接管（交给各自滚动）
-        self._scroll_regions = [self.var_canvas, self.log_text,
-                                self.preview_text, self.tryout_text,
-                                self.src_text]
+        for region in (self.var_canvas, self.log_text, self.preview_text,
+                       self.tryout_text, self.src_text):
+            self._scroll_regions.append(region)
     def _on_body_inner_configure(self, event):
         """内容尺寸变化时更新滚动区域并自适应高度。"""
         self.body_canvas.configure(scrollregion=self.body_canvas.bbox("all"))
@@ -641,8 +932,9 @@ class Application(tk.Tk):
         return os.path.join(base, "duipai_state.json")
 
     def _load_state(self):
-        """读取状态文件，返回折叠的区块集合。"""
+        """读取状态文件，返回折叠的区块集合与变量行折叠状态。"""
         collapsed = {}
+        self._rows_state = {}
         try:
             with open(self._state_path(), "r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -650,17 +942,59 @@ class Application(tk.Tk):
             for key, val in sections.items():
                 if isinstance(val, bool) and val:
                     collapsed[key] = True
+            rows = data.get("rows", {})
+            for path, val in rows.items():
+                if isinstance(val, bool) and val:
+                    self._rows_state[str(path)] = True
         except Exception:
             pass
         return collapsed
 
+    def _apply_row_collapsed_state(self):
+        """把保存的变量行折叠状态应用到当前行。"""
+        state = getattr(self, "_rows_state", {})
+        if not state:
+            return
+        for path in state:
+            row = self._row_by_path(path)
+            if row is None:
+                continue
+            if not getattr(row, "collapsed", False):
+                row._toggle_collapse()
+
+    def _row_path(self, row):
+        """返回变量行在树中的路径索引（如 '0'、'2.1'）。"""
+        if row.parent_group is None:
+            return str(self.rows.index(row))
+        return self._row_path(row.parent_group) + "." + \
+            str(row.parent_group.children.index(row))
+
+    def _row_by_path(self, path):
+        """根据路径索引找到变量行（找不到返回 None）。"""
+        parts = path.split(".")
+        current = self.rows
+        row = None
+        for p in parts:
+            idx = int(p)
+            if idx >= len(current):
+                return None
+            row = current[idx]
+            if row.kind == "group":
+                current = row.children
+        return row
+
     def _save_state(self):
-        """把各区块折叠状态写入状态文件。"""
+        """把各区块折叠状态与变量行折叠状态写入状态文件。"""
         try:
             sections = {k: bool(v["collapsed"])
                         for k, v in self._sections.items()}
+            rows_state = {}
+            for row in self._ordered_rows():
+                if getattr(row, "collapsed", False):
+                    rows_state[self._row_path(row)] = True
             with open(self._state_path(), "w", encoding="utf-8") as fh:
-                json.dump({"sections": sections}, fh, ensure_ascii=False, indent=2)
+                json.dump({"sections": sections, "rows": rows_state}, fh,
+                          ensure_ascii=False, indent=2)
         except Exception:
             pass
 
@@ -820,7 +1154,9 @@ class Application(tk.Tk):
         self.src_gutter.yview_moveto(0)
 
     def _build_generator_section(self, parent):
-        box = self._section(parent, "数据生成器", "blue", expand=True)
+        # expand=False：区块按内容自然高度展开，总高度超出窗口时由整窗滚动接管，
+        # 让图形化与 DSL 区域都充分展示，不被相互挤压。
+        box = self._section(parent, "数据生成器", "blue", expand=False)
 
         # 生成器模式选择
         mode = ttk.Frame(box)
@@ -879,8 +1215,26 @@ class Application(tk.Tk):
         # ---- 图形化面板（上半区）----
         self.gui_panel = ttk.Frame(box)
         self.gui_panel.pack(fill="both", expand=True)
-        top = ttk.Frame(self.gui_panel)
-        top.pack(fill="x", pady=(6, 0))
+
+        # 顶部按钮行：小屏时可横向滚动，避免按钮被截断
+        top_holder = ttk.Frame(self.gui_panel)
+        top_holder.pack(fill="x", pady=(6, 0))
+        self.top_canvas = tk.Canvas(top_holder, highlightthickness=0,
+                                    height=32, yscrollincrement=1)
+        top_hbar = ttk.Scrollbar(top_holder, orient="horizontal",
+                                 command=self.top_canvas.xview)
+        self.top_canvas.configure(xscrollcommand=top_hbar.set)
+        self.top_canvas.pack(side="top", fill="x")
+        top_hbar.pack(side="bottom", fill="x")
+        top_inner = ttk.Frame(self.top_canvas)
+        self.top_canvas.create_window((0, 0), window=top_inner, anchor="nw")
+        top_inner.bind(
+            "<Configure>",
+            lambda e: self.top_canvas.configure(
+                scrollregion=self.top_canvas.bbox("all")))
+        self._bind_scroll_recursive(self.top_canvas)
+        self._scroll_regions.append(self.top_canvas)
+        top = top_inner
         ttk.Button(top, text="+ 整数变量", style="Blue.TButton",
                    command=lambda: self._add_var("int")).pack(side="left", padx=(0, 4))
         ttk.Button(top, text="+ 浮点数变量", style="Blue.TButton",
@@ -893,17 +1247,27 @@ class Application(tk.Tk):
                    command=lambda: self._add_var("tree")).pack(side="left", padx=4)
         ttk.Button(top, text="+ 图变量", style="Blue.TButton",
                    command=lambda: self._add_var("graph")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 字符串变量", style="Blue.TButton",
+                   command=lambda: self._add_var("string")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 0/1序列", style="Blue.TButton",
+                   command=lambda: self._add_var("binseq")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 区间", style="Blue.TButton",
+                   command=lambda: self._add_var("intervals")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 点集", style="Blue.TButton",
+                   command=lambda: self._add_var("points")).pack(side="left", padx=4)
+        ttk.Button(top, text="+ 重复组", style="Red.TButton",
+                   command=lambda: self._add_var("group")).pack(side="left", padx=4)
         ttk.Label(top, text="↑ 图形化配置（可编辑）", style="Hint.TLabel").pack(
-            side="right", padx=(8, 0))
+            side="left", padx=(8, 0))
 
-        # 可滚动的变量列表（Canvas + Scrollbar）
+        # 可滚动的变量列表（Canvas + Scrollbar）：高度自适应内容，展开显示不截断
         scroll_holder = ttk.Frame(self.gui_panel)
         scroll_holder.pack(fill="both", expand=True, pady=(6, 0))
         scroll_holder.rowconfigure(0, weight=1)
         scroll_holder.columnconfigure(0, weight=1)
 
         self.var_canvas = tk.Canvas(scroll_holder, highlightthickness=0,
-                                    height=140, yscrollincrement=1)
+                                    height=60, yscrollincrement=1)
         vbar = ttk.Scrollbar(scroll_holder, orient="vertical",
                              command=self.var_canvas.yview)
         hbar = ttk.Scrollbar(scroll_holder, orient="horizontal",
@@ -922,13 +1286,13 @@ class Application(tk.Tk):
         vbar.grid(row=0, column=1, sticky="ns")
         hbar.grid(row=1, column=0, sticky="ew")
 
-        # 内容尺寸变化时刷新滚动区域；窗口尺寸变化时让内容宽度自适应
+        # 内容尺寸变化时刷新滚动区域并自适应宽高：
+        # 宽度 —— 内容更宽保持自然宽度（横向滚动条），否则贴合画布；
+        # 高度 —— 行少时完全展开，行多时限制上限并显示纵向滚动条。
         self.var_inner.bind(
-            "<Configure>",
-            lambda e: self.var_canvas.configure(scrollregion=self.var_canvas.bbox("all")))
+            "<Configure>", self._on_var_inner_configure)
         self.var_canvas.bind(
-            "<Configure>",
-            lambda e: self.var_canvas.itemconfigure(self.var_inner_window, width=e.width))
+            "<Configure>", self._fit_var_inner_size)
 
         ttk.Label(self.gui_panel,
                   text="提示：变量从上到下每行各生成一行数据；数组的“长度来源”可引用前面变量的值作为长度。").pack(
@@ -951,7 +1315,7 @@ class Application(tk.Tk):
                    command=self._dsl_help).pack(side="right", padx=(0, 6))
         mono = ("Menlo", 10) if sys.platform == "darwin" else ("Consolas", 9)
         self.dsl_text = scrolledtext.ScrolledText(
-            self.dsl_panel, height=6, wrap="char", font=mono,
+            self.dsl_panel, height=2, wrap="char", font=mono,
             bg=self.text_bg, fg=self.text_fg, undo=True,
             selectbackground=self.accent, insertofftime=0)
         self.dsl_text.pack(fill="both", expand=True, pady=(4, 0))
@@ -964,7 +1328,7 @@ class Application(tk.Tk):
         ttk.Button(prev_head, text="预览生成示例", style="Blue.TButton",
                    command=self._preview).pack(side="right")
         mono = ("Menlo", 10) if sys.platform == "darwin" else ("Consolas", 9)
-        self.preview_text = tk.Text(box, height=5, wrap="char", font=mono,
+        self.preview_text = tk.Text(box, height=2, wrap="char", font=mono,
                                     bg=self.text_bg, fg=self.text_fg,
                                     relief="solid", bd=1, padx=6, pady=4,
                                     state="disabled", insertofftime=0)
@@ -996,6 +1360,8 @@ class Application(tk.Tk):
             self.dsl_text.delete("1.0", "end")
             self.dsl_text.insert("1.0", text)
             self.dsl_text.edit_reset()
+            nlines = max(2, min(len(text.splitlines()), 30))
+            self.dsl_text.configure(height=nlines)
         finally:
             self._syncing_dsl = False
 
@@ -1022,22 +1388,75 @@ class Application(tk.Tk):
         self._sync_dsl_from_gui()
 
     def _load_config_to_rows(self, items):
-        """用统一配置重建图形化变量列表。"""
+        """用统一配置重建图形化变量列表；group 递归构建子变量行。"""
         # 先移除现有所有行
         for row in list(self.rows):
             self.delete_row(row)
         for item in items:
-            row = VariableRow(self.var_inner, item["kind"], self)
-            row.name = item["name"]
-            self.rows.append(row)
-            row.frame.pack(fill="x", padx=2, pady=2)
-            self._refresh_sources()
-            self._fill_row_from_item(row, item)
-            self._bind_scroll_recursive(row.frame)
-            self._bind_dsl_sync(row.frame)
+            self._build_row_from_item(self.var_inner, item, parent_group=None,
+                                      top=True)
         self._refresh_sources()
         self._update_scrollregion()
         self._sync_dsl_from_gui()
+        self._fit_var_inner_size()
+        self._apply_row_collapsed_state()
+
+    def _build_row_from_item(self, parent, item, parent_group=None, top=False):
+        """递归构建变量行（group 含子行）。"""
+        if item["kind"] == "group":
+            row = VariableRow(parent, "group", self, parent_group=parent_group)
+            if parent_group is not None:
+                parent_group.children.append(row)
+            else:
+                self.rows.append(row)
+            row.frame.pack(fill="x", padx=2, pady=6)
+            self._bind_scroll_recursive(row.frame)
+            for sub in item.get("items", []):
+                if sub.get("kind") == "group":
+                    continue   # 组不支持嵌套，忽略
+                self._build_row_from_item(row.group_inner, sub,
+                                          parent_group=row)
+            self._fill_group_times(row, item.get("times", "1"))
+            self._fit_group_canvas(row)
+            return
+        row = VariableRow(parent, item["kind"], self,
+                          parent_group=parent_group)
+        if parent_group is not None:
+            parent_group.children.append(row)
+        else:
+            self.rows.append(row)
+        row.name = item["name"]
+        row.frame.pack(fill="x", padx=2, pady=6)
+        self._refresh_sources()
+        self._fill_row_from_item(row, item)
+        self._bind_scroll_recursive(row.frame)
+        self._bind_dsl_sync(row.frame)
+
+    def _fill_group_times(self, row, expr):
+        """把 group 次数表达式填到次数来源下拉。"""
+        import re as _re
+        row.times_source_var.set("随机范围")
+        m = _re.fullmatch(r"\s*int\(\s*(.*?)\s*,\s*(.*?)\s*\)\s*", str(expr))
+        if m:
+            row.times_min.delete(0, "end")
+            row.times_min.insert(0, m.group(1))
+            row.times_max.delete(0, "end")
+            row.times_max.insert(0, m.group(2))
+            self._apply_source_state_by_row(row, "times_source",
+                                            ["times_min", "times_max"])
+            return
+        for label, prev in getattr(row, "_times_refs", []):
+            if (prev.name or "") == expr:
+                row.times_source_var.set(label)
+                self._apply_source_state_by_row(row, "times_source",
+                                                ["times_min", "times_max"])
+                return
+        # 其它表达式：作为只读表达式源
+        self._extra_sources_row(row, "times_source",
+                                f"表达式(DSL)：{expr}", expr)
+        row.times_source_var.set(f"表达式(DSL)：{expr}")
+        self._apply_source_state_by_row(row, "times_source",
+                                        ["times_min", "times_max"])
 
     def _fill_row_from_item(self, row, item):
         """把统一配置填回变量行控件。"""
@@ -1085,6 +1504,26 @@ class Application(tk.Tk):
                        ["len_min", "len_max"], item["cols"])
         elif item["kind"] == "perm":
             set_source("n_source", "_n_refs", ["n_min", "n_max"], item["n"])
+        elif item["kind"] == "string":
+            set_source("len_source", "_len_refs",
+                       ["len_min", "len_max"], item["cols"])
+            set_source("rows_source", "_rows_refs",
+                       ["rows_min", "rows_max"], item.get("rows", "1"))
+            set_entry(row.charset_entry,
+                      item.get("charset") or "abcdefghijklmnopqrstuvwxyz")
+        elif item["kind"] == "binseq":
+            set_source("n_source", "_n_refs", ["n_min", "n_max"], item["n"])
+            set_source("k_source", "_k_refs", ["k_min", "k_max"], item["k"])
+        elif item["kind"] == "intervals":
+            set_source("n_source", "_n_refs", ["n_min", "n_max"], item["n"])
+            set_entry(row.iv_lo, item["lo"])
+            set_entry(row.iv_hi, item["hi"])
+        elif item["kind"] == "points":
+            set_source("n_source", "_n_refs", ["n_min", "n_max"], item["n"])
+            set_entry(row.pt_xlo, item["xlo"])
+            set_entry(row.pt_xhi, item["xhi"])
+            set_entry(row.pt_ylo, item["ylo"])
+            set_entry(row.pt_yhi, item["yhi"])
         elif item["kind"] in ("tree", "graph"):
             set_source("n_source", "_n_refs", ["n_min", "n_max"], item["n"])
             w = item.get("w")
@@ -1096,11 +1535,38 @@ class Application(tk.Tk):
                 set_entry(row.w_max, w["max"])
                 set_entry(row.w_prec, w.get("prec", "6"))
             row._toggle_w_mode()
+            val = item.get("val")
+            if val is None:
+                row.v_mode_var.set("无")
+            else:
+                row.v_mode_var.set("整数" if val["kind"] == "int" else "浮点")
+                set_entry(row.v_min, val["min"])
+                set_entry(row.v_max, val["max"])
+                set_entry(row.v_prec, val.get("prec", "6"))
+            row._toggle_v_mode()
             if item["kind"] == "graph":
-                row.g_dir_var.set("有向" if item.get("directed") else "无向")
-                row.g_conn_var.set("连通" if item.get("connected") else "任意")
-                set_source("m_source", "_m_refs",
-                           ["m_min", "m_max"], item["m"])
+                gtype = item.get("gtype", "general")
+                row.g_type_var.set(
+                    {"general": "一般", "bipartite": "二分图", "dag": "DAG",
+                     "ring": "环", "base_ring": "基环树"}.get(gtype, "一般"))
+                row._toggle_g_type()
+                if gtype in ("ring", "base_ring"):
+                    if gtype == "base_ring":
+                        import re as _re2
+                        m2 = _re2.fullmatch(
+                            r"\s*int\(\s*(.*?)\s*,\s*(.*?)\s*\)\s*",
+                            str(item.get("k", "3")))
+                        if m2:
+                            set_entry(row.k_min, m2.group(1))
+                            set_entry(row.k_max, m2.group(2))
+                        else:
+                            set_entry(row.k_min, item.get("k", "3"))
+                            set_entry(row.k_max, item.get("k", "3"))
+                else:
+                    row.g_dir_var.set("有向" if item.get("directed") else "无向")
+                    row.g_conn_var.set("连通" if item.get("connected") else "任意")
+                    set_source("m_source", "_m_refs",
+                               ["m_min", "m_max"], item["m"])
 
     @staticmethod
     def _apply_source_state_by_row(row, attr, entries):
@@ -1205,36 +1671,151 @@ class Application(tk.Tk):
             self.ext_panel.grid_remove()
             self.builtin_panel.grid()
 
-    def _add_var(self, kind):
-        """添加一个变量条目。kind: int/float/array/perm/tree/graph。"""
-        row = VariableRow(self.var_inner, kind, self)
-        self.rows.append(row)
-        row.frame.pack(fill="x", padx=2, pady=2)
+    def _add_var(self, kind, parent_group=None):
+        """添加一个变量条目。kind: int/float/array/perm/tree/graph。
+        parent_group: 目标 group 行；None 表示顶层。"""
+        parent = parent_group.group_inner if parent_group else self.var_inner
+        row = VariableRow(parent, kind, self, parent_group=parent_group)
+        if parent_group is not None:
+            parent_group.children.append(row)
+        else:
+            self.rows.append(row)
+        row.frame.pack(fill="x", padx=2, pady=6)
         self._bind_scroll_recursive(row.frame)
         self._bind_dsl_sync(row.frame)
         self._refresh_sources()
         self._update_scrollregion()
         self._sync_dsl_from_gui()
+        if parent_group is not None:
+            self._fit_group_canvas(parent_group)
+        self._fit_var_inner_size()
+
+    def _ordered_rows(self):
+        """深度优先展平所有变量行（含组内子行），供引用/序列化使用。"""
+        out = []
+
+        def walk(lst):
+            for r in lst:
+                out.append(r)
+                if r.kind == "group":
+                    walk(r.children)
+        walk(self.rows)
+        return out
+
+    def _row_list_of(self, row):
+        """返回 row 所在列表（顶层 rows 或父组的 children）。"""
+        if row.parent_group is not None:
+            return row.parent_group.children
+        return self.rows
 
     def move_row(self, row, delta):
-        """上下移动变量条目。"""
-        i = self.rows.index(row)
+        """上下移动变量条目（组内/顶层各自独立）。"""
+        lst = self._row_list_of(row)
+        i = lst.index(row)
         j = i + delta
-        if not (0 <= j < len(self.rows)):
+        if not (0 <= j < len(lst)):
             return
-        self.rows[i], self.rows[j] = self.rows[j], self.rows[i]
+        lst[i], lst[j] = lst[j], lst[i]
         self._repack_rows()
         self._refresh_sources()
         self._sync_dsl_from_gui()
 
     def delete_row(self, row):
-        """删除变量条目。"""
-        if row in self.rows:
-            self.rows.remove(row)
+        """删除变量条目；删除 group 时同时删除其全部子行。"""
+        lst = self._row_list_of(row)
+        if row in lst:
+            parent_group = row.parent_group
+            lst.remove(row)
+            if row.kind == "group":
+                for child in list(row.children):
+                    child.frame.destroy()
+                row.children.clear()
             row.frame.destroy()
             self._refresh_sources()
             self._update_scrollregion()
             self._sync_dsl_from_gui()
+            if parent_group is not None:
+                self._fit_group_canvas(parent_group)
+            self._fit_var_inner_size()
+
+    def _repack_rows(self):
+        """按 rows / children 列表顺序重新 pack 全部条目（改变上下顺序）。"""
+        for row in self.rows:
+            row.frame.pack_forget()
+            if row.kind == "group":
+                for child in row.children:
+                    child.frame.pack_forget()
+        for row in self.rows:
+            row.frame.pack(fill="x", padx=2, pady=6)
+            if row.kind == "group":
+                for child in row.children:
+                    child.frame.pack(fill="x", padx=2, pady=6)
+        self._update_scrollregion()
+
+    def _on_var_inner_configure(self, event=None):
+        """变量列表内容尺寸变化：刷新滚动区域，并延迟重算 canvas 高度（等布局稳定）。"""
+        self.var_canvas.configure(scrollregion=self.var_canvas.bbox("all"))
+        if getattr(self, "_var_resize_pending", False):
+            return
+        self._var_resize_pending = True
+        self.after_idle(self._var_resize_done)
+
+    def _var_resize_done(self):
+        self._var_resize_pending = False
+        self._fit_var_inner_size()
+
+    def _fit_var_inner_size(self, event=None):
+        """让变量列表自适应内容尺寸：
+        - 宽度：内容更宽则保持自然宽度（出现横向滚动条），否则贴合画布宽度；
+        - 高度：完全贴合内容高度（不设上限），由整窗滚动接管。
+        同时刷新所有 group（含嵌套）的 canvas 高度，保证各层完全展开。"""
+        try:
+            req_w = self.var_inner.winfo_reqwidth()
+            req_h = self.var_inner.winfo_reqheight()
+            canvas_w = self.var_canvas.winfo_width()
+            self.var_canvas.itemconfigure(self.var_inner_window,
+                                          width=max(req_w, canvas_w))
+            self.var_canvas.configure(height=max(req_h, 30))
+            for row in self._ordered_rows():
+                if row.kind == "group" and hasattr(row, "group_canvas"):
+                    self._fit_group_canvas(row)
+        except tk.TclError:
+            pass
+
+    def _fit_group_canvas(self, group_row, event=None):
+        """让 group 内子变量 Canvas 高度贴合内容、宽度自适应（可横向滚动）。"""
+        try:
+            inner = group_row.group_inner
+            canvas = group_row.group_canvas
+            req_w = inner.winfo_reqwidth()
+            req_h = inner.winfo_reqheight()
+            canvas_w = canvas.winfo_width()
+            window_id = getattr(group_row, "_group_win_id", None)
+            if window_id is None:
+                window_id = canvas.create_window((0, 0), window=inner,
+                                                 anchor="nw")
+                group_row._group_win_id = window_id
+            canvas.itemconfigure(window_id, width=max(req_w, canvas_w))
+            canvas.configure(height=max(req_h, 24))
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        except tk.TclError:
+            pass
+
+    def _on_group_inner_configure(self, group_row, event=None):
+        """组内内容尺寸变化：刷新滚动区域并自适应高度（含嵌套，不设上限）。"""
+        try:
+            group_row.group_canvas.configure(
+                scrollregion=group_row.group_canvas.bbox("all"))
+            if getattr(group_row, "_gfit_pending", False):
+                return
+            group_row._gfit_pending = True
+            self.after_idle(lambda: self._group_fit_done(group_row))
+        except tk.TclError:
+            pass
+
+    def _group_fit_done(self, group_row):
+        group_row._gfit_pending = False
+        self._fit_group_canvas(group_row)
 
     def _bind_dsl_sync(self, widget):
         """给变量行内的输入框/下拉绑定“变更后同步 DSL”事件。"""
@@ -1249,21 +1830,39 @@ class Application(tk.Tk):
 
     def _auto_name(self, row):
         """为变量行生成唯一的 DSL 变量名（v1, v2, ...）。"""
-        used = {r.name for r in self.rows if r is not row and r.name}
+        used = {r.name for r in self._ordered_rows() if r is not row and r.name}
         i = 1
         while f"v{i}" in used:
             i += 1
         return f"v{i}"
 
     def _refresh_sources(self):
-        """重建各行的“来源”下拉选项，只列出它之前的可引用变量。"""
+        """重建各行的“来源”下拉选项，只列出它之前的可引用变量（含组外/组内）。"""
         refable = ("int", "float", "tree", "graph", "perm")
-        for i, row in enumerate(self.rows):
+        ordered = self._ordered_rows()
+        for i, row in enumerate(ordered):
+            if row.kind == "group":
+                # group 行自身的次数来源可引用之前所有变量
+                cur = row.times_source_var.get()
+                values = ["随机范围"]
+                refs = []
+                for prev in ordered[:i]:
+                    if prev.kind in refable:
+                        label = prev.name or self._auto_name(prev)
+                        prev.name = label
+                        values.append(label)
+                        refs.append((label, prev))
+                extra = row._extra_sources.get("times_source", [])
+                row._set_sources("times_source", "_times_refs",
+                                 ["times_min", "times_max"], values, refs,
+                                 cur if cur in values + [t for t, _ in extra]
+                                 else "随机范围", extra)
+                continue
             if not row.name:
                 row.name = self._auto_name(row)
             values = ["随机范围"]
             refs = []
-            for j, prev in enumerate(self.rows[:i]):
+            for prev in ordered[:i]:
                 if prev.kind in refable:
                     label = prev.name or self._auto_name(prev)
                     prev.name = label
@@ -1289,6 +1888,39 @@ class Application(tk.Tk):
                                  ["n_min", "n_max"], values, refs,
                                  cur if cur in values + [t for t, _ in extra]
                                  else "随机范围", extra)
+            elif row.kind == "string":
+                cur = row.len_source_var.get()
+                extra = row._extra_sources.get("len_source", [])
+                row._set_sources("len_source", "_len_refs",
+                                 ["len_min", "len_max"], values, refs,
+                                 cur if cur in values + [t for t, _ in extra]
+                                 else "随机范围", extra)
+                cur = row.rows_source_var.get()
+                extra = row._extra_sources.get("rows_source", [])
+                row._set_sources("rows_source", "_rows_refs",
+                                 ["rows_min", "rows_max"], values, refs,
+                                 cur if cur in values + [t for t, _ in extra]
+                                 else "随机范围", extra)
+            elif row.kind == "binseq":
+                cur = row.n_source_var.get()
+                extra = row._extra_sources.get("n_source", [])
+                row._set_sources("n_source", "_n_refs",
+                                 ["n_min", "n_max"], values, refs,
+                                 cur if cur in values + [t for t, _ in extra]
+                                 else "随机范围", extra)
+                cur = row.k_source_var.get()
+                extra = row._extra_sources.get("k_source", [])
+                row._set_sources("k_source", "_k_refs",
+                                 ["k_min", "k_max"], values, refs,
+                                 cur if cur in values + [t for t, _ in extra]
+                                 else "随机范围", extra)
+            elif row.kind in ("intervals", "points"):
+                cur = row.n_source_var.get()
+                extra = row._extra_sources.get("n_source", [])
+                row._set_sources("n_source", "_n_refs",
+                                 ["n_min", "n_max"], values, refs,
+                                 cur if cur in values + [t for t, _ in extra]
+                                 else "随机范围", extra)
             elif row.kind == "graph":
                 cur = row.n_source_var.get()
                 extra = row._extra_sources.get("n_source", [])
@@ -1308,7 +1940,7 @@ class Application(tk.Tk):
         for row in self.rows:
             row.frame.pack_forget()
         for row in self.rows:
-            row.frame.pack(fill="x", padx=2, pady=2)
+            row.frame.pack(fill="x", padx=2, pady=6)
         self._update_scrollregion()
 
     def _update_scrollregion(self):
@@ -1360,16 +1992,51 @@ class Application(tk.Tk):
         return False
 
     def _on_canvas_wheel(self, event):
-        """滚动内置生成器变量列表（每格约 120px）；到边界时放行给整窗（滚动链）。"""
+        """滚动内置生成器变量列表（每格约 120px）；Shift 则横向滚动。
+        到边界时放行给整窗（滚动链）。"""
+        if getattr(event, "state", 0) & 0x0001:   # Shift 按下 -> 横向滚动
+            units = self._wheel_units(event, 120.0)
+            if units == 0:
+                return "break"
+            canvas = self._wheel_target(event.widget)
+            if canvas is None:
+                return "break"
+            left, right = canvas.xview()
+            if (units < 0 and left <= 0.0) or (units > 0 and right >= 1.0):
+                return "break"
+            canvas.xview_scroll(int(units), "units")
+            return "break"
         units = self._wheel_units(event, 120.0)
         if units == 0:
             return "break"
-        top, bottom = self.var_canvas.yview()
+        canvas = self._wheel_target(event.widget)
+        if canvas is None:
+            return None
+        top, bottom = canvas.yview()
         if (units < 0 and top <= 0.0) or (units > 0 and bottom >= 1.0):
-            self.var_canvas._wheel_acc = 0.0
+            canvas._wheel_acc = 0.0
             return None   # 已到边界：不 break，让整窗滚轮接管
-        self._scroll_units(self.var_canvas, units)
+        self._scroll_units(canvas, units)
         return "break"   # 阻止 bind_all 整页滚轮再次触发
+
+    def _wheel_target(self, widget):
+        """滚轮事件所在的自滚动 canvas（变量列表 / 顶部按钮区 / 各 group 内）。
+
+        优先返回最内层：嵌套 group 内子行应滚最深的 group_canvas。"""
+        group_canvases = [row.group_canvas for row in self._ordered_rows()
+                          if row.kind == "group" and hasattr(row, "group_canvas")
+                          and self._is_descendant(widget, row.group_canvas)]
+        if group_canvases:
+            # 取最内层：它是所有匹配者中最深的后代
+            deepest = group_canvases[0]
+            for c in group_canvases[1:]:
+                if self._is_descendant(c, deepest):
+                    deepest = c
+            return deepest
+        for canvas in (self.var_canvas, self.top_canvas):
+            if self._is_descendant(widget, canvas):
+                return canvas
+        return None
 
     def _bind_scroll_recursive(self, widget):
         """把滚轮事件递归绑定到 widget 及其所有子控件，保证列表内任意位置可滚动。"""
@@ -1379,12 +2046,20 @@ class Application(tk.Tk):
         for child in widget.winfo_children():
             self._bind_scroll_recursive(child)
 
+    def _all_scroll_regions(self):
+        """全部自滚动区域：基础区域 + 各 group 内 canvas（动态追加）。"""
+        regions = list(getattr(self, "_scroll_regions", ()))
+        for row in self._ordered_rows():
+            if row.kind == "group" and hasattr(row, "group_canvas"):
+                regions.append(row.group_canvas)
+        return regions
+
     def _on_window_wheel(self, event):
         """整窗滚轮：自滚动区域到边界时接管（滚动链），否则交给内层。"""
         units = self._wheel_units(event, 160.0)
         if units == 0:
             return
-        for region in getattr(self, "_scroll_regions", ()):
+        for region in self._all_scroll_regions():
             if self._is_descendant(event.widget, region) and \
                     not self._region_at_boundary(region, units):
                 return   # 内层还有空间，交给内层
@@ -1480,11 +2155,13 @@ class Application(tk.Tk):
         self._set_preview(text)
 
     def _set_preview(self, text):
-        """把文本写入只读预览区。"""
+        """把文本写入只读预览区，并随内容自适应高度（不设上限）。"""
         self.preview_text.configure(state="normal")
         self.preview_text.delete("1.0", "end")
         self.preview_text.insert("1.0", text)
         self.preview_text.configure(state="disabled")
+        nlines = max(2, min(len(text.splitlines()), 40))
+        self.preview_text.configure(height=nlines)
 
     # ------------------------------------------------------------------ #
     # 试运行（正解/暴力各按钮）
@@ -1628,84 +2305,156 @@ class Application(tk.Tk):
     # 配置快照（在主线程读取所有 Tcl 变量，供后台线程使用）
     # ------------------------------------------------------------------ #
     def _snapshot_vars(self):
-        """把当前内置生成器的变量列表转成统一表达式配置（含名字）。"""
+        """把当前内置生成器的变量列表转成统一表达式配置（含名字），group 递归。"""
+        return self._snapshot_list(self.rows)
+
+    def _snapshot_list(self, rows):
+        """快照一个变量行列表（顶层或 group 内）。"""
         config = []
-        for row in self.rows:
-            if not row.name:
-                row.name = self._auto_name(row)
-            name = row.name
-
-            def src_expr(attr, refs_attr, entries):
-                """返回某个“来源”的表达式字符串：随机范围 -> int(a,b)，引用 -> 名字。"""
-                src = getattr(row, attr + "_var").get()
-                if src == "随机范围":
-                    lo, hi = [getattr(row, e).get() for e in entries]
-                    return f"int({lo}, {hi})"
-                for label, expr in row._extra_sources.get(attr, []):
-                    if src == label:
-                        return expr
-                ref_row = row._ref_row(refs_attr, src)
-                if ref_row is not None and self.rows.index(ref_row) < \
-                        self.rows.index(row):
-                    return ref_row.name or self._auto_name(ref_row)
-                return src
-
-            if row.kind == "int":
-                config.append({"name": name, "kind": "int",
-                               "min": row.min_entry.get(),
-                               "max": row.max_entry.get()})
-            elif row.kind == "float":
-                config.append({"name": name, "kind": "float",
-                               "min": row.min_entry.get(),
-                               "max": row.max_entry.get(),
-                               "prec": row.prec_entry.get()})
-            elif row.kind == "array":
-                config.append({"name": name, "kind": "array",
-                               "elem_type": row.elem_type.get(),
-                               "el_min": row.el_min.get(),
-                               "el_max": row.el_max.get(),
-                               "prec": row.prec_entry.get(),
-                               "rows": src_expr("rows_source", "_rows_refs",
-                                                ["rows_min", "rows_max"]),
-                               "cols": src_expr("len_source", "_len_refs",
-                                                ["len_min", "len_max"])})
-            elif row.kind == "perm":
-                config.append({"name": name, "kind": "perm",
-                               "n": src_expr("n_source", "_n_refs",
-                                             ["n_min", "n_max"])})
-            elif row.kind == "tree":
-                w = None
-                wm = row.w_mode_var.get()
-                if wm == "整数":
-                    w = {"kind": "int", "min": row.w_min.get(),
-                         "max": row.w_max.get(), "prec": "6"}
-                elif wm == "浮点":
-                    w = {"kind": "float", "min": row.w_min.get(),
-                         "max": row.w_max.get(),
-                         "prec": row.w_prec.get()}
-                config.append({"name": name, "kind": "tree",
-                               "n": src_expr("n_source", "_n_refs",
-                                             ["n_min", "n_max"]),
-                               "w": w})
-            elif row.kind == "graph":
-                w = None
-                wm = row.w_mode_var.get()
-                if wm == "整数":
-                    w = {"kind": "int", "min": row.w_min.get(),
-                         "max": row.w_max.get(), "prec": "6"}
-                elif wm == "浮点":
-                    w = {"kind": "float", "min": row.w_min.get(),
-                         "max": row.w_max.get(),
-                         "prec": row.w_prec.get()}
-                config.append({"name": name, "kind": "graph",
-                               "n": src_expr("n_source", "_n_refs",
-                                             ["n_min", "n_max"]),
-                               "m": src_expr("m_source", "_m_refs",
-                                             ["m_min", "m_max"]),
-                               "directed": row.g_dir_var.get() == "有向",
-                               "connected": row.g_conn_var.get() == "连通",
-                               "w": w})
+        for row in rows:
+            item = self._snapshot_row(row)
+            if item:
+                config.append(item)
         return config
+
+    def _snapshot_row(self, row):
+        """把单个变量行转成配置项；group 行递归生成 items。"""
+        if row.kind == "group":
+            ordered = self._ordered_rows()
+            idx = ordered.index(row)
+            return {"kind": "group",
+                    "times": self._src_expr_of(row, "times_source",
+                                               "_times_refs",
+                                               ["times_min", "times_max"],
+                                               ordered, idx),
+                    "items": self._snapshot_list(row.children)}
+        if not row.name:
+            row.name = self._auto_name(row)
+        name = row.name
+        ordered = self._ordered_rows()
+        idx = ordered.index(row)
+
+        def src_expr(attr, refs_attr, entries):
+            return self._src_expr_of(row, attr, refs_attr, entries, ordered, idx)
+
+        def val_expr():
+            """读取节点权值描述（v_mode 控件），无则 None。"""
+            vm = row.v_mode_var.get()
+            if vm == "整数":
+                return {"kind": "int", "min": row.v_min.get(),
+                        "max": row.v_max.get(), "prec": "6"}
+            if vm == "浮点":
+                return {"kind": "float", "min": row.v_min.get(),
+                        "max": row.v_max.get(),
+                        "prec": row.v_prec.get()}
+            return None
+
+        if row.kind == "int":
+            return {"name": name, "kind": "int",
+                    "min": row.min_entry.get(),
+                    "max": row.max_entry.get()}
+        if row.kind == "float":
+            return {"name": name, "kind": "float",
+                    "min": row.min_entry.get(),
+                    "max": row.max_entry.get(),
+                    "prec": row.prec_entry.get()}
+        if row.kind == "array":
+            return {"name": name, "kind": "array",
+                    "elem_type": row.elem_type.get(),
+                    "el_min": row.el_min.get(),
+                    "el_max": row.el_max.get(),
+                    "prec": row.prec_entry.get(),
+                    "rows": src_expr("rows_source", "_rows_refs",
+                                     ["rows_min", "rows_max"]),
+                    "cols": src_expr("len_source", "_len_refs",
+                                     ["len_min", "len_max"])}
+        if row.kind == "string":
+            return {"name": name, "kind": "string",
+                    "rows": src_expr("rows_source", "_rows_refs",
+                                     ["rows_min", "rows_max"]),
+                    "cols": src_expr("len_source", "_len_refs",
+                                     ["len_min", "len_max"]),
+                    "charset": row.charset_entry.get()}
+        if row.kind == "binseq":
+            return {"name": name, "kind": "binseq",
+                    "n": src_expr("n_source", "_n_refs",
+                                  ["n_min", "n_max"]),
+                    "k": src_expr("k_source", "_k_refs",
+                                  ["k_min", "k_max"])}
+        if row.kind == "intervals":
+            return {"name": name, "kind": "intervals",
+                    "n": src_expr("n_source", "_n_refs",
+                                  ["n_min", "n_max"]),
+                    "lo": row.iv_lo.get(),
+                    "hi": row.iv_hi.get()}
+        if row.kind == "points":
+            return {"name": name, "kind": "points",
+                    "n": src_expr("n_source", "_n_refs",
+                                  ["n_min", "n_max"]),
+                    "xlo": row.pt_xlo.get(), "xhi": row.pt_xhi.get(),
+                    "ylo": row.pt_ylo.get(), "yhi": row.pt_yhi.get()}
+        if row.kind == "perm":
+            return {"name": name, "kind": "perm",
+                    "n": src_expr("n_source", "_n_refs",
+                                  ["n_min", "n_max"])}
+        if row.kind == "tree":
+            w = None
+            wm = row.w_mode_var.get()
+            if wm == "整数":
+                w = {"kind": "int", "min": row.w_min.get(),
+                     "max": row.w_max.get(), "prec": "6"}
+            elif wm == "浮点":
+                w = {"kind": "float", "min": row.w_min.get(),
+                     "max": row.w_max.get(),
+                     "prec": row.w_prec.get()}
+            return {"name": name, "kind": "tree",
+                    "n": src_expr("n_source", "_n_refs",
+                                  ["n_min", "n_max"]),
+                    "w": w, "val": val_expr()}
+        if row.kind == "graph":
+            w = None
+            wm = row.w_mode_var.get()
+            if wm == "整数":
+                w = {"kind": "int", "min": row.w_min.get(),
+                     "max": row.w_max.get(), "prec": "6"}
+            elif wm == "浮点":
+                w = {"kind": "float", "min": row.w_min.get(),
+                     "max": row.w_max.get(),
+                     "prec": row.w_prec.get()}
+            gtype = {"一般": "general", "二分图": "bipartite",
+                     "DAG": "dag", "环": "ring",
+                     "基环树": "base_ring"}.get(row.g_type_var.get(),
+                                               "general")
+            item = {"name": name, "kind": "graph",
+                    "n": src_expr("n_source", "_n_refs",
+                                  ["n_min", "n_max"]),
+                    "directed": row.g_dir_var.get() == "有向",
+                    "connected": row.g_conn_var.get() == "连通",
+                    "gtype": gtype, "w": w, "val": val_expr()}
+            if gtype in ("ring", "base_ring"):
+                item["m"] = item["n"]
+                if gtype == "base_ring":
+                    kmn, kmx = row.k_min.get(), row.k_max.get()
+                    item["k"] = kmn if kmn == kmx else f"int({kmn}, {kmx})"
+            else:
+                item["m"] = src_expr("m_source", "_m_refs",
+                                     ["m_min", "m_max"])
+            return item
+        return None
+
+    def _src_expr_of(self, row, attr, refs_attr, entries, ordered, idx):
+        """返回某行某个“来源”的表达式字符串；引用检查用 ordered 列表。"""
+        src = getattr(row, attr + "_var").get()
+        if src == "随机范围":
+            lo, hi = [getattr(row, e).get() for e in entries]
+            return f"int({lo}, {hi})"
+        for label, expr in row._extra_sources.get(attr, []):
+            if src == label:
+                return expr
+        ref_row = row._ref_row(refs_attr, src)
+        if ref_row is not None and ordered.index(ref_row) < idx:
+            return ref_row.name or self._auto_name(ref_row)
+        return src
 
     # ------------------------------------------------------------------ #
     # 数据生成（后台线程可安全调用）
@@ -1765,11 +2514,19 @@ class Application(tk.Tk):
         """按统一表达式配置逐项生成数据，返回 (行列表, 错误信息)。
 
         config 项带 name，所有数值字段为表达式字符串（用 dsl.eval_expr 求值，
-        环境为前面已生成变量的值）。"""
+        环境为前面已生成变量的值）。group 项递归展开，块内变量不泄露到外层。"""
         import dsl
         lines = []      # 最终输出的每一行
-        env = {}        # name -> 可引用数值（int/float 为值，perm/tree/graph 为规模）
-        refable = ("int", "float", "perm", "tree", "graph")
+        err = self._gen_items(config, lines, {})
+        return (None, err) if err else (lines, None)
+
+    def _gen_items(self, config, lines, outer_env):
+        """生成一组配置项，写入 lines；返回错误信息或 None。
+
+        env：可引用的变量环境。group 块用 outer_env 副本 + 块内累积，
+        块结束后不写回 outer_env。"""
+        import dsl
+        env = dict(outer_env)
         for idx, item in enumerate(config, start=1):
             name = item.get("name") or f"v{idx}"
             try:
@@ -1780,15 +2537,25 @@ class Application(tk.Tk):
                         raise ValueError(f"{label}表达式错误：{e}")
 
                 kind = item["kind"]
-                if kind == "int":
+                if kind == "group":
+                    times = int(ev(item["times"], "group 重复次数"))
+                    if times < 1:
+                        raise ValueError("group 重复次数应 >= 1")
+                    for _ in range(times):
+                        sub_lines = []
+                        err = self._gen_items(item.get("items", []),
+                                              sub_lines, env)
+                        if err:
+                            return err
+                        lines.extend(sub_lines)
+                elif kind == "int":
                     lo, hi = ev(item["min"], "整数变量范围"), \
                              ev(item["max"], "整数变量范围")
                     lo, hi = int(lo), int(hi)
                     if lo > hi:
                         raise ValueError("整数变量范围最小值不能大于最大值")
                     value = random.randint(lo, hi)
-                    row_line = str(value)
-                    lines.append(row_line)
+                    lines.append(str(value))
                     env[name] = value
                 elif kind == "float":
                     lo = float(ev(item["min"], "浮点数变量范围"))
@@ -1799,11 +2566,9 @@ class Application(tk.Tk):
                     if not (0 <= prec <= 15):
                         raise ValueError("浮点数变量精度应在 0~15 之间")
                     value = random.uniform(lo, hi)
-                    row_line = format_float(value, prec)
-                    lines.append(row_line)
+                    lines.append(format_float(value, prec))
                     env[name] = value
                 elif kind == "array":
-                    # 元素生成器（根据元素类型确定）
                     if item["elem_type"] == "浮点数":
                         elo = float(ev(item["el_min"], "数组元素范围"))
                         ehi = float(ev(item["el_max"], "数组元素范围"))
@@ -1826,43 +2591,109 @@ class Application(tk.Tk):
                             return [str(random.randint(elo, ehi))
                                     for _ in range(n)]
 
-                    # 行数 R 与每行长度 L（表达式求值）
                     rows = int(ev(item["rows"], "数组行数"))
                     length = int(ev(item["cols"], "数组每行长度"))
                     if rows < 1:
                         raise ValueError("数组行数不能小于 1")
                     if length < 0:
                         raise ValueError("数组每行长度不能为负")
-
-                    # 输出 R 行、每行 L 个元素（支持 2*n、n*m 等格式）
-                    row_lines = [" ".join(make_elems(length))
-                                 for _ in range(rows)]
-                    lines.extend(row_lines)
+                    lines.extend([" ".join(make_elems(length))
+                                  for _ in range(rows)])
+                elif kind == "string":
+                    rows = int(ev(item.get("rows", "1"), "字符串行数"))
+                    length = int(ev(item["cols"], "字符串长度"))
+                    charset = item.get("charset")
+                    if charset is None or charset == "":
+                        raise ValueError("字符串字符集不能为空")
+                    if rows < 1:
+                        raise ValueError("字符串行数不能小于 1")
+                    if length < 0:
+                        raise ValueError("字符串长度不能为负")
+                    lines.extend(["".join(random.choice(charset)
+                                          for _ in range(length))
+                                  for _ in range(rows)])
+                elif kind == "binseq":
+                    n = int(ev(item["n"], "0/1序列长度"))
+                    k = int(ev(item["k"], "0/1序列中1的个数"))
+                    if n < 0:
+                        raise ValueError("0/1序列长度不能为负")
+                    if not (0 <= k <= n):
+                        raise ValueError("1 的个数 k 应在 0~n 之间")
+                    seq = [1] * k + [0] * (n - k)
+                    random.shuffle(seq)
+                    lines.append(" ".join(map(str, seq)))
+                elif kind == "intervals":
+                    n = int(ev(item["n"], "区间个数"))
+                    lo = int(ev(item["lo"], "区间下界"))
+                    hi = int(ev(item["hi"], "区间上界"))
+                    if n < 0:
+                        raise ValueError("区间个数不能为负")
+                    if lo > hi:
+                        raise ValueError("区间下界不能大于上界")
+                    for _ in range(n):
+                        l = random.randint(lo, hi)
+                        r = random.randint(l, hi)
+                        lines.append(f"{l} {r}")
+                elif kind == "points":
+                    n = int(ev(item["n"], "点个数"))
+                    xlo = int(ev(item["xlo"], "点 x 下界"))
+                    xhi = int(ev(item["xhi"], "点 x 上界"))
+                    ylo = int(ev(item["ylo"], "点 y 下界"))
+                    yhi = int(ev(item["yhi"], "点 y 上界"))
+                    if n < 0:
+                        raise ValueError("点个数不能为负")
+                    if xlo > xhi or ylo > yhi:
+                        raise ValueError("点坐标范围无效")
+                    for _ in range(n):
+                        x = random.randint(xlo, xhi)
+                        y = random.randint(ylo, yhi)
+                        lines.append(f"{x} {y}")
                 elif kind == "perm":
                     n = int(ev(item["n"], "排列长度"))
                     if n < 1:
                         raise ValueError("排列长度 n 应 >= 1")
                     perm = list(range(1, n + 1))
                     random.shuffle(perm)
-                    row_line = " ".join(map(str, perm))
-                    lines.append(row_line)
+                    lines.append(" ".join(map(str, perm)))
                     env[name] = n
                 elif kind == "tree":
                     n = int(ev(item["n"], "树顶点数"))
                     if n < 1:
                         raise ValueError("树顶点数 n 应 >= 1")
                     w = item.get("w")
-                    # 随机带标号树：节点 i 随机连到前面某个节点
+                    val = item.get("val")
+                    tree_lines = [str(n)]
+                    if val:
+                        tree_lines.append(self._val_line(n, val, ev))
                     edge_lines = []
                     for i in range(2, n + 1):
                         p = random.randint(1, i - 1)
                         u, v = (i, p) if random.random() < 0.5 else (p, i)
                         edge_lines.append(self._edge_line(u, v, w, ev))
                     random.shuffle(edge_lines)
-                    tree_lines = [str(n)] + edge_lines
-                    lines.extend(tree_lines)
+                    lines.extend(tree_lines + edge_lines)
                     env[name] = n
                 elif kind == "graph":
+                    gtype = item.get("gtype", "general")
+                    w = item.get("w")
+                    val = item.get("val")
+                    if gtype == "ring":
+                        n = int(ev(item["n"], "环顶点数"))
+                        if n < 3:
+                            raise ValueError("环顶点数 n 应 >= 3")
+                        self._graph_ring(n, w, ev, lines, val)
+                        env[name] = n
+                        continue
+                    if gtype == "base_ring":
+                        n = int(ev(item["n"], "基环树顶点数"))
+                        k = int(ev(item.get("k", "3"), "基环树环大小"))
+                        if n < 3:
+                            raise ValueError("基环树顶点数 n 应 >= 3")
+                        if not (3 <= k <= n):
+                            raise ValueError("环大小 k 应在 3~n 之间")
+                        self._graph_base_ring(n, k, w, ev, lines, val)
+                        env[name] = n
+                        continue
                     directed = item["directed"]
                     connected = item["connected"]
                     n = int(ev(item["n"], "图顶点数"))
@@ -1871,6 +2702,14 @@ class Application(tk.Tk):
                         raise ValueError("图顶点数 n 应 >= 1")
                     if m < 0:
                         raise ValueError("图边数 m 不能为负")
+                    if gtype == "dag":
+                        self._graph_dag(n, m, w, ev, lines, val)
+                        env[name] = n
+                        continue
+                    if gtype == "bipartite":
+                        self._graph_bipartite(n, m, w, ev, lines, val)
+                        env[name] = n
+                        continue
                     possible = n * (n - 1) if directed else n * (n - 1) // 2
                     if m > possible:
                         raise ValueError(
@@ -1905,22 +2744,126 @@ class Application(tk.Tk):
                                 attempts += 1
                             if len(edge_set) < m:
                                 raise ValueError("随机补边失败，请检查参数")
-                    w = item.get("w")
                     edges = list(edge_set)
                     random.shuffle(edges)
-                    edge_lines = [self._edge_line(u, v, w, ev) for u, v in edges]
-                    graph_lines = [f"{n} {m}"] + edge_lines
+                    graph_lines = [f"{n} {m}"]
+                    if val:
+                        graph_lines.append(self._val_line(n, val, ev))
+                    graph_lines += [self._edge_line(u, v, w, ev)
+                                    for u, v in edges]
                     lines.extend(graph_lines)
                     env[name] = n
             except ValueError as e:
-                return None, f"第 {idx} 个变量设置错误：{e}"
-        return lines, None
+                return f"第 {idx} 个变量设置错误：{e}"
+        return None
+
+    def _val_line(self, n, val, ev):
+        """生成一行 n 个节点权值。"""
+        if val["kind"] in ("整数", "int"):
+            lo = int(ev(val["min"], "节点权值范围"))
+            hi = int(ev(val["max"], "节点权值范围"))
+            if lo > hi:
+                raise ValueError("节点权值范围最小值不能大于最大值")
+            return " ".join(str(random.randint(lo, hi)) for _ in range(n))
+        lo = float(ev(val["min"], "节点权值范围"))
+        hi = float(ev(val["max"], "节点权值范围"))
+        if lo > hi:
+            raise ValueError("节点权值范围最小值不能大于最大值")
+        prec = int(ev(val.get("prec", "6"), "节点权值精度"))
+        if not (0 <= prec <= 15):
+            raise ValueError("节点权值精度应在 0~15 之间")
+        return " ".join(format_float(random.uniform(lo, hi), prec)
+                        for _ in range(n))
+
+    def _graph_ring(self, n, w, ev, lines, val):
+        """生成一个 n 顶点环（n 条边首尾相连）。"""
+        if val:
+            lines.append(str(n))
+            lines.append(self._val_line(n, val, ev))
+        else:
+            lines.append(str(n))
+        edge_lines = []
+        for i in range(1, n + 1):
+            u, v = i, (i % n) + 1
+            if random.random() < 0.5:
+                u, v = v, u
+            edge_lines.append(self._edge_line(u, v, w, ev))
+        lines.extend(edge_lines)
+
+    def _graph_base_ring(self, n, k, w, ev, lines, val):
+        """生成一个 n 顶点基环树：k 顶点环 + 其余挂到环上。"""
+        if val:
+            lines.append(str(n))
+            lines.append(self._val_line(n, val, ev))
+        else:
+            lines.append(str(n))
+        edge_set = set()
+        for i in range(1, k + 1):
+            u, v = i, (i % k) + 1
+            if u > v:
+                u, v = v, u
+            edge_set.add((u, v))
+        for i in range(k + 1, n + 1):
+            p = random.randint(1, i - 1)
+            u, v = i, p
+            if u > v:
+                u, v = v, u
+            edge_set.add((u, v))
+        edges = list(edge_set)
+        random.shuffle(edges)
+        lines.extend(self._edge_line(u, v, w, ev) for u, v in edges)
+
+    def _graph_dag(self, n, m, w, ev, lines, val):
+        """生成一个 n 顶点 m 条边的有向无环图（边从小 id 指向大 id）。"""
+        if m < 0:
+            raise ValueError("图边数 m 不能为负")
+        possible = n * (n - 1) // 2
+        if m > possible:
+            raise ValueError(f"图边数 m={m} 超过上限 {possible}（DAG，n={n}）")
+        edge_set = set()
+        attempts = 0
+        while len(edge_set) < m and attempts < m * 50 + 2000:
+            u = random.randint(1, n - 1)
+            v = random.randint(u + 1, n)
+            edge_set.add((u, v))
+            attempts += 1
+        if len(edge_set) < m:
+            raise ValueError("随机补边失败，请检查参数")
+        edges = list(edge_set)
+        random.shuffle(edges)
+        graph_lines = [f"{n} {m}"]
+        if val:
+            graph_lines.append(self._val_line(n, val, ev))
+        graph_lines += [self._edge_line(u, v, w, ev) for u, v in edges]
+        lines.extend(graph_lines)
+
+    def _graph_bipartite(self, n, m, w, ev, lines, val):
+        """生成一个 n 顶点 m 条边的二分图（无向，边仅跨两部）。"""
+        if m < 0:
+            raise ValueError("图边数 m 不能为负")
+        left = n // 2
+        right = n - left
+        if left < 1 or right < 1:
+            raise ValueError("二分图 n 过小，无法分两部")
+        possible = left * right
+        if m > possible:
+            raise ValueError(f"图边数 m={m} 超过上限 {possible}（二分图，n={n}）")
+        pairs = [(u, left + v) for u in range(1, left + 1)
+                 for v in range(1, right + 1)]
+        edge_set = set(random.sample(pairs, m))
+        edges = list(edge_set)
+        random.shuffle(edges)
+        graph_lines = [f"{n} {m}"]
+        if val:
+            graph_lines.append(self._val_line(n, val, ev))
+        graph_lines += [self._edge_line(u, v, w, ev) for u, v in edges]
+        lines.extend(graph_lines)
 
     def _edge_line(self, u, v, w, ev):
         """按边权描述生成一条边文本。w: None 或 {kind,min,max,prec}。"""
         if w is None:
             return f"{u} {v}"
-        if w["kind"] == "整数":
+        if w["kind"] in ("整数", "int"):
             wlo = int(ev(w["min"], "边权范围"))
             whi = int(ev(w["max"], "边权范围"))
             if wlo > whi:

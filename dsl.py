@@ -46,7 +46,8 @@ _TOKEN_RE = re.compile(r"""
     \s*(?:
         (?P<num>\d+\.\d+|\d+|\.\d+)
       | (?P<name>[A-Za-z_][A-Za-z0-9_]*)
-      | (?P<op>\*\*|[+*/%()-]|//)
+      | (?P<str>"[^"\n]*"|'[^'\n]*')
+      | (?P<op>\*\*|[+*/%()\-=:]|//)
       | (?P<comma>,)
       | (?P<bad>.)
     )
@@ -65,6 +66,9 @@ def tokenize(src):
         if m.group("num") is not None:
             raw = m.group("num")
             toks.append(("num", float(raw) if ("." in raw) else int(raw)))
+        elif m.group("str") is not None:
+            raw = m.group("str")
+            toks.append(("str", raw[1:-1]))
         elif m.group("name") is not None:
             toks.append(("name", m.group("name")))
         elif m.group("op") is not None:
@@ -245,7 +249,8 @@ def eval_expr(src, env):
 # --------------------------------------------------------------------------- #
 
 _KNOWN_COMMANDS = {"int", "float", "ints", "floats", "matrix", "matf",
-                   "perm", "tree", "graph"}
+                   "perm", "tree", "graph", "str", "strs", "binseq",
+                   "intervals", "points", "ring", "base_ring", "group"}
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -292,8 +297,12 @@ def _tok_text(tok):
         return str(val)
     if kind == "name":
         return val
+    if kind == "str":
+        return f'"{val}"'
     if kind == "op":
-        return " " + val + " " if val in ("*", "//") else val
+        if val in ("*", "//", "="):
+            return " " + val + " "
+        return val
     if kind == "comma":
         return ", "
     return val
@@ -337,107 +346,250 @@ def _weight_to_item(toks):
     raise DslError("边权参数必须是 int(a,b) 或 float(a,b[,prec])")
 
 
+def _split_kw_args(toks):
+    """把命令括号内的 token 拆成 (位置参数列表, 关键字参数字典)。
+
+    每个参数为一个子 token 列表；含顶层 '=' 的视为关键字参数 k=v。"""
+    raw = _split_args(toks)
+    if raw and not raw[-1]:
+        raw.pop()
+    pos = []
+    kw = {}
+    for arg in raw:
+        eq_idx = None
+        depth = 0
+        for i, tok in enumerate(arg):
+            if tok[0] == "op" and tok[1] == "(":
+                depth += 1
+            elif tok[0] == "op" and tok[1] == ")":
+                depth -= 1
+            elif tok[0] == "op" and tok[1] == "=" and depth == 0:
+                eq_idx = i
+                break
+        if eq_idx is not None and eq_idx > 0:
+            kname = _expr_text(arg[:eq_idx]).strip()
+            if not _NAME_RE.match(kname):
+                raise DslError(f"非法关键字参数名：{kname}")
+            if kname in kw:
+                raise DslError(f"关键字参数重复：{kname}")
+            if kname in ("type",):
+                v = _expr_text(arg[eq_idx + 1:]).strip().strip('"')
+                kw[kname] = v
+            elif kname == "val":
+                kw["val"] = _weight_to_item(arg[eq_idx + 1:])
+            else:
+                kw[kname] = _expr_text(arg[eq_idx + 1:])
+        else:
+            pos.append(arg)
+    return pos, kw
+
+
+def _parse_cmd(name, cmd, args):
+    """根据命令名把参数 token 组装成统一配置项。"""
+    pos, kw = _split_kw_args(args)
+
+    def arity(lo, hi):
+        if not (lo <= len(pos) <= hi):
+            raise DslError(f"{cmd} 需要 {lo}~{hi} 个位置参数，实际 {len(pos)} 个")
+
+    def weight(v=None):
+        return v if v is not None else None
+
+    if cmd == "int":
+        arity(2, 2)
+        return {"name": name, "kind": "int",
+                "min": _expr_text(pos[0]), "max": _expr_text(pos[1])}
+    if cmd == "float":
+        arity(2, 3)
+        return {"name": name, "kind": "float",
+                "min": _expr_text(pos[0]), "max": _expr_text(pos[1]),
+                "prec": kw.get("prec", _expr_text(pos[2]) if len(pos) == 3
+                               else "6")}
+    if cmd in ("ints", "floats"):
+        arity(3, 4)
+        return {"name": name, "kind": "array",
+                "elem_type": "整数" if cmd == "ints" else "浮点数",
+                "el_min": _expr_text(pos[1]), "el_max": _expr_text(pos[2]),
+                "prec": kw.get("prec", _expr_text(pos[3]) if len(pos) == 4
+                               else "6"),
+                "rows": "1", "cols": _expr_text(pos[0])}
+    if cmd in ("matrix", "matf"):
+        arity(4, 5)
+        return {"name": name, "kind": "array",
+                "elem_type": "整数" if cmd == "matrix" else "浮点数",
+                "el_min": _expr_text(pos[2]), "el_max": _expr_text(pos[3]),
+                "prec": kw.get("prec", _expr_text(pos[4]) if len(pos) == 5
+                               else "6"),
+                "rows": _expr_text(pos[0]), "cols": _expr_text(pos[1])}
+    if cmd == "perm":
+        arity(1, 1)
+        return {"name": name, "kind": "perm", "n": _expr_text(pos[0])}
+    if cmd == "tree":
+        arity(1, 2)
+        item = {"name": name, "kind": "tree", "n": _expr_text(pos[0]),
+                "w": None, "val": None}
+        if len(pos) == 2:
+            item["w"] = _weight_to_item(pos[1])
+        if "val" in kw:
+            item["val"] = kw["val"]
+        if "w" in kw:
+            item["w"] = _weight_to_item(
+                tokenize(kw["w"])) if isinstance(kw["w"], str) else kw["w"]
+        return item
+    if cmd == "graph":
+        arity(3, 5)
+        gtype = kw.get("type", "general")
+        directed = bool(int(_expr_text(pos[2]))) if len(pos) >= 3 else True
+        connected = bool(int(_expr_text(pos[3]))) if len(pos) >= 4 else False
+        if gtype == "dag":
+            directed = True
+        elif gtype == "bipartite":
+            directed = False
+        item = {"name": name, "kind": "graph",
+                "n": _expr_text(pos[0]), "m": _expr_text(pos[1]),
+                "directed": directed, "connected": connected,
+                "gtype": gtype, "w": None, "val": None}
+        if len(pos) == 5:
+            item["w"] = _weight_to_item(pos[4])
+        if "val" in kw:
+            item["val"] = kw["val"]
+        if "w" in kw:
+            item["w"] = kw["w"] if isinstance(kw["w"], dict) else \
+                _weight_to_item(tokenize(kw["w"]))
+        return item
+    if cmd in ("str", "strs"):
+        arity(1, 3)
+        charset = kw.get("charset", None)
+        if charset is None:
+            for p in pos[1:]:
+                if _is_str_toks(p):
+                    charset = _expr_text(p).strip('"')
+                    pos = [p0 for p0 in pos if p0 is not p]
+                    break
+        if charset is None:
+            charset = "abcdefghijklmnopqrstuvwxyz"
+        if cmd == "str":
+            arity(1, 1)
+            return {"name": name, "kind": "string", "rows": "1",
+                    "cols": _expr_text(pos[0]), "charset": charset}
+        arity(2, 2)
+        return {"name": name, "kind": "string",
+                "rows": _expr_text(pos[0]), "cols": _expr_text(pos[1]),
+                "charset": charset}
+    if cmd == "binseq":
+        arity(2, 2)
+        return {"name": name, "kind": "binseq",
+                "n": _expr_text(pos[0]), "k": _expr_text(pos[1])}
+    if cmd == "intervals":
+        arity(3, 3)
+        return {"name": name, "kind": "intervals",
+                "n": _expr_text(pos[0]), "lo": _expr_text(pos[1]),
+                "hi": _expr_text(pos[2])}
+    if cmd == "points":
+        arity(5, 5)
+        return {"name": name, "kind": "points",
+                "n": _expr_text(pos[0]),
+                "xlo": _expr_text(pos[1]), "xhi": _expr_text(pos[2]),
+                "ylo": _expr_text(pos[3]), "yhi": _expr_text(pos[4])}
+    if cmd == "ring":
+        arity(1, 1)
+        return {"name": name, "kind": "graph", "gtype": "ring",
+                "n": _expr_text(pos[0]), "m": _expr_text(pos[0]),
+                "directed": False, "connected": True, "w": None, "val": None}
+    if cmd == "base_ring":
+        arity(2, 2)
+        return {"name": name, "kind": "graph", "gtype": "base_ring",
+                "n": _expr_text(pos[0]), "m": _expr_text(pos[0]),
+                "k": _expr_text(pos[1]),
+                "directed": False, "connected": True, "w": None, "val": None}
+    raise DslError(f"未知命令：{cmd}")
+
+
+def _is_str_toks(toks):
+    return len(toks) == 1 and toks[0][0] == "str"
+
+
 def parse(text):
     """解析 DSL 文本，返回 (配置列表, 错误信息或 None)。
 
-    配置项与 GUI 的 _snapshot_vars 同构，另带 name；所有数值字段为表达式字符串。
-    """
+    支持 group(expr): 缩进块（块内语句重复 expr 次），以及所有命令的
+    位置参数 + 关键字参数混用。"""
+    lines = text.splitlines()
     items = []
     seen = set()
-    for lineno, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            eq = line.find("=")
-            if eq < 0:
-                raise DslError("语句缺少 '='")
-            name = line[:eq].strip()
-            rhs = line[eq + 1:].strip()
-            if not name:
-                raise DslError("缺少变量名")
-            if not _NAME_RE.match(name):
-                raise DslError(f"非法变量名：{name}")
-            if name in seen:
-                raise DslError(f"变量名重复：{name}")
-            if name in ("int", "float"):
-                raise DslError(f"变量名不能是保留字：{name}")
-            toks = tokenize(rhs)
-            if not toks or toks[0][0] != "name":
-                raise DslError("语句右侧必须是命令")
-            cmd = toks[0][1]
-            if cmd not in _KNOWN_COMMANDS:
-                raise DslError(f"未知命令：{cmd}")
-            # 校验整体是 cmd(...)
-            if len(toks) < 3 or not (toks[1][0] == "op" and toks[1][1] == "("):
-                raise DslError(f"{cmd} 命令缺少左括号")
-            if not (toks[-1][0] == "op" and toks[-1][1] == ")"):
-                raise DslError(f"{cmd} 命令缺少右括号")
-            args = _split_args(toks[2:-1])
-            if args and not args[-1]:
-                args.pop()
-            def arity(lo, hi):
-                if not (lo <= len(args) <= hi):
-                    raise DslError(
-                        f"{cmd} 需要 {lo}~{hi} 个参数，实际 {len(args)} 个")
-            if cmd == "int":
-                arity(2, 2)
-                items.append({"name": name, "kind": "int",
-                              "min": _expr_text(args[0]),
-                              "max": _expr_text(args[1])})
-            elif cmd == "float":
-                arity(2, 3)
-                item = {"name": name, "kind": "float",
-                        "min": _expr_text(args[0]),
-                        "max": _expr_text(args[1]), "prec": "6"}
-                if len(args) == 3:
-                    item["prec"] = _expr_text(args[2])
-                items.append(item)
-            elif cmd in ("ints", "floats"):
-                arity(3, 4)
-                item = {"name": name, "kind": "array",
-                        "elem_type": "整数" if cmd == "ints" else "浮点数",
-                        "el_min": _expr_text(args[1]),
-                        "el_max": _expr_text(args[2]),
-                        "prec": _expr_text(args[3]) if len(args) == 4 else "6",
-                        "rows": "1", "cols": _expr_text(args[0])}
-                items.append(item)
-            elif cmd in ("matrix", "matf"):
-                arity(4, 5)
-                item = {"name": name, "kind": "array",
-                        "elem_type": "整数" if cmd == "matrix" else "浮点数",
-                        "el_min": _expr_text(args[2]),
-                        "el_max": _expr_text(args[3]),
-                        "prec": _expr_text(args[4]) if len(args) == 5 else "6",
-                        "rows": _expr_text(args[0]),
-                        "cols": _expr_text(args[1])}
-                items.append(item)
-            elif cmd == "perm":
-                arity(1, 1)
-                items.append({"name": name, "kind": "perm",
-                              "n": _expr_text(args[0])})
-            elif cmd == "tree":
-                arity(1, 2)
-                item = {"name": name, "kind": "tree",
-                        "n": _expr_text(args[0]), "w": None}
-                if len(args) == 2:
-                    item["w"] = _weight_to_item(args[1])
-                items.append(item)
-            elif cmd == "graph":
-                arity(3, 5)
-                item = {"name": name, "kind": "graph",
-                        "n": _expr_text(args[0]), "m": _expr_text(args[1]),
-                        "directed": bool(int(_expr_text(args[2]))),
-                        "connected": bool(int(_expr_text(args[3]))),
-                        "w": None}
-                if len(args) == 5:
-                    item["w"] = _weight_to_item(args[4])
-                items.append(item)
-            seen.add(name)
-        except DslError as e:
-            return None, f"第 {lineno} 行：{e}"
-        except (ValueError, TypeError) as e:
-            return None, f"第 {lineno} 行：{e}"
+
+    def parse_block(start, indent, outer_seen, in_group=False):
+        """解析一个缩进块，返回 (配置列表, 下一个行号)。
+
+        in_group=True 表示当前块已在 group 内；此时再出现 group 视为嵌套，报错。"""
+        block = []
+        local_seen = set(outer_seen)
+        i = start
+        while i < len(lines):
+            raw = lines[i]
+            if not raw.strip() or raw.strip().startswith("#"):
+                i += 1
+                continue
+            cur_indent = len(raw) - len(raw.lstrip(" "))
+            if cur_indent < indent:
+                break
+            if cur_indent > indent:
+                raise DslError(
+                    f"第 {i + 1} 行：缩进不正确（不应超过 {indent}）")
+            line = raw.strip()
+            try:
+                if line.startswith("group(") and line.rstrip().endswith(":"):
+                    if in_group:
+                        raise DslError("group 不支持嵌套（组内不能再套组）")
+                    inner = line[len("group("):line.rfind(")")]
+                    times = inner.strip()
+                    if not times:
+                        raise DslError("group 的重复次数为空")
+                    if "=" in times:
+                        raise DslError("group 参数必须是表达式，不支持关键字")
+                    sub_items, i = parse_block(i + 1, indent + 4,
+                                               local_seen, in_group=True)
+                    block.append({"kind": "group", "times": times,
+                                  "items": sub_items})
+                    continue
+                eq = line.find("=")
+                if eq < 0:
+                    raise DslError("语句缺少 '='")
+                name = line[:eq].strip()
+                rhs = line[eq + 1:].strip()
+                if not name:
+                    raise DslError("缺少变量名")
+                if not _NAME_RE.match(name):
+                    raise DslError(f"非法变量名：{name}")
+                if name in local_seen:
+                    raise DslError(f"变量名重复：{name}")
+                if name in _KNOWN_COMMANDS:
+                    raise DslError(f"变量名不能是保留字：{name}")
+                toks = tokenize(rhs)
+                if not toks or toks[0][0] != "name":
+                    raise DslError("语句右侧必须是命令")
+                cmd = toks[0][1]
+                if cmd not in _KNOWN_COMMANDS:
+                    raise DslError(f"未知命令：{cmd}")
+                if cmd == "group":
+                    raise DslError("group 需要以 'group(...):' 开头且不含 '='")
+                if len(toks) < 3 or not (toks[1][0] == "op"
+                                         and toks[1][1] == "("):
+                    raise DslError(f"{cmd} 命令缺少左括号")
+                if not (toks[-1][0] == "op" and toks[-1][1] == ")"):
+                    raise DslError(f"{cmd} 命令缺少右括号")
+                item = _parse_cmd(name, cmd, toks[2:-1])
+                block.append(item)
+                local_seen.add(name)
+                i += 1
+            except DslError as e:
+                raise DslError(f"第 {i + 1} 行：{e}")
+        return block, i
+
+    try:
+        items, _ = parse_block(0, 0, seen)
+    except DslError as e:
+        return None, str(e)
     return items, None
 
 
@@ -454,6 +606,13 @@ def _fmt_range(item, key_lo, key_hi, is_int, prec_key=None):
     if str(prec) == "6":
         return f"float({lo}, {hi})"
     return f"float({lo}, {hi}, {prec})"
+
+
+def _fmt_weight(w):
+    """边权/节点权值描述 dict -> DSL 片段，如 int(1,10)。"""
+    if w is None:
+        return None
+    return _fmt_range(w, "min", "max", w["kind"] == "int", "prec")
 
 
 def _line_for(item):
@@ -481,25 +640,66 @@ def _line_for(item):
         return base + ")"
     if kind == "perm":
         return f"{name} = perm({item['n']})"
+    if kind == "string":
+        cmd = "str" if str(item.get("rows")) == "1" else "strs"
+        if cmd == "str":
+            base = f"{name} = str({item['cols']}"
+        else:
+            base = f"{name} = strs({item['rows']}, {item['cols']}"
+        charset = item.get("charset", "")
+        if charset and charset != "abcdefghijklmnopqrstuvwxyz":
+            base += f', "{charset}"'
+        return base + ")"
+    if kind == "binseq":
+        return f"{name} = binseq({item['n']}, {item['k']})"
+    if kind == "intervals":
+        return f"{name} = intervals({item['n']}, {item['lo']}, {item['hi']})"
+    if kind == "points":
+        return (f"{name} = points({item['n']}, {item['xlo']}, {item['xhi']}, "
+                f"{item['ylo']}, {item['yhi']})")
     if kind == "tree":
         base = f"{name} = tree({item['n']}"
         w = item.get("w")
         if w:
-            base += ", " + _fmt_range(w, "min", "max", w["kind"] == "int",
-                                      "prec")
+            base += f", w={_fmt_weight(w)}"
+        val = item.get("val")
+        if val:
+            base += f", val={_fmt_weight(val)}"
         return base + ")"
     if kind == "graph":
-        w = item.get("w")
+        gtype = item.get("gtype", "general")
+        if gtype == "ring":
+            return f"{name} = ring({item['n']})"
+        if gtype == "base_ring":
+            return f"{name} = base_ring({item['n']}, {item['k']})"
         d = 1 if item.get("directed") else 0
         c = 1 if item.get("connected") else 0
         base = f"{name} = graph({item['n']}, {item['m']}, {d}, {c}"
+        if gtype != "general":
+            base += f', type="{gtype}"'
+        w = item.get("w")
+        val = item.get("val")
         if w:
-            base += ", " + _fmt_range(w, "min", "max", w["kind"] == "int",
-                                      "prec")
+            base += f", w={_fmt_weight(w)}"
+        if val:
+            base += f", val={_fmt_weight(val)}"
         return base + ")"
     raise DslError(f"未知类型：{kind}")
 
 
+def _item_lines(item):
+    """把配置项序列化为若干行 DSL（group 递归展开缩进）。"""
+    if item["kind"] == "group":
+        out = [f"group({item['times']}):"]
+        for sub in item.get("items", []):
+            out += ["    " + ln for ln in _item_lines(sub)]
+        return out
+    return [_line_for(item)]
+
+
 def serialize(items):
-    """把配置列表序列化为 DSL 文本（每行一条语句）。"""
-    return "\n".join(_line_for(it) for it in items)
+    """把配置列表序列化为 DSL 文本（每行一条语句，group 递归缩进）。"""
+    out = []
+    for it in items:
+        out += _item_lines(it)
+    return "\n".join(out)
