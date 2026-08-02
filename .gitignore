@@ -1,0 +1,12 @@
+# 构建产物（PyInstaller）
+build/
+dist/
+
+# 运行时状态与对拍失败现场
+duipai_state.json
+fail/
+
+# Python
+__pycache__/
+*.py[cod]
+*.spec
