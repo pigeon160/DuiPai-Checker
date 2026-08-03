@@ -4,7 +4,7 @@
 对拍输入 DSL —— 指令式语言，描述内置生成器的输入格式。
 
 语法（一条语句一行，等号赋值，顺序执行，可引用前面定义的名字）：
-    注释：以 # 开头
+    注释：以 # 开头（顶部“# 多测模式：重复 N 次”表示多组数据）
     表达式：常数（5、1.5）、变量名（n）、算术（2*n、n+1、n//2）、
             范围随机调用 int(a,b) / float(a,b,prec)，
             支持括号、一元负号；运算符 + - * / // % **
@@ -24,6 +24,9 @@
         t   = tree(n, float(0, 1, 4))  # 树 + 浮点边权，精度4
     扩展（GUI 往返需要，与“图变量”对应）：
         g   = graph(n, m, 1, 1, int(1,10))  # 有向/连通可用 1/0，边权可选
+
+多组数据：顶部写“# 多测模式：重复 N 次”，生成时首行输出 N，
+随后整块语句独立随机重复 N 次（每轮可引用仅当轮前面的值）。
 
 引用规则：只能引用前面定义的名字；数组不可被引用；perm/tree/graph 引用其规模值。
 """
@@ -250,7 +253,7 @@ def eval_expr(src, env):
 
 _KNOWN_COMMANDS = {"int", "float", "ints", "floats", "matrix", "matf",
                    "perm", "tree", "graph", "str", "strs", "binseq",
-                   "intervals", "points", "ring", "base_ring", "group"}
+                   "intervals", "points", "ring", "base_ring"}
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -509,19 +512,39 @@ def _is_str_toks(toks):
     return len(toks) == 1 and toks[0][0] == "str"
 
 
-def parse(text):
-    """解析 DSL 文本，返回 (配置列表, 错误信息或 None)。
+_REPEAT_COMMENT = "多测模式"
 
-    支持 group(expr): 缩进块（块内语句重复 expr 次），以及所有命令的
-    位置参数 + 关键字参数混用。"""
+
+def _parse_repeat(lines):
+    """从 DSL 文本顶部读取多测模式注释，返回 {"enabled": bool, "count": str}
+    或 None。识别形如“# 多测模式：重复 3 次”的注释行。"""
+    for raw in lines[:8]:
+        s = raw.strip()
+        if not s.startswith("#"):
+            continue
+        body = s.lstrip("#").strip()
+        if body == _REPEAT_COMMENT:
+            return {"enabled": True, "count": "1"}
+        if body.startswith(_REPEAT_COMMENT + "：") or \
+                body.startswith(_REPEAT_COMMENT + ":"):
+            rest = body.split("：", 1)[-1].split(":", 1)[-1].strip()
+            m = re.fullmatch(r"重复\s*(\d+)\s*次?", rest)
+            if m:
+                return {"enabled": True, "count": m.group(1)}
+    return None
+
+
+def parse(text):
+    """解析 DSL 文本，返回 (配置 dict, 错误信息或 None)。
+
+    配置 dict 形如 {"repeat": {...} | None, "items": [...]}；repeat 来自
+    顶部注释“# 多测模式：重复 N 次”。所有命令支持位置参数 + 关键字参数混用。"""
     lines = text.splitlines()
+    repeat = _parse_repeat(lines)
     items = []
     seen = set()
 
-    def parse_block(start, indent, outer_seen, in_group=False):
-        """解析一个缩进块，返回 (配置列表, 下一个行号)。
-
-        in_group=True 表示当前块已在 group 内；此时再出现 group 视为嵌套，报错。"""
+    def parse_block(start, indent, outer_seen):
         block = []
         local_seen = set(outer_seen)
         i = start
@@ -538,20 +561,6 @@ def parse(text):
                     f"第 {i + 1} 行：缩进不正确（不应超过 {indent}）")
             line = raw.strip()
             try:
-                if line.startswith("group(") and line.rstrip().endswith(":"):
-                    if in_group:
-                        raise DslError("group 不支持嵌套（组内不能再套组）")
-                    inner = line[len("group("):line.rfind(")")]
-                    times = inner.strip()
-                    if not times:
-                        raise DslError("group 的重复次数为空")
-                    if "=" in times:
-                        raise DslError("group 参数必须是表达式，不支持关键字")
-                    sub_items, i = parse_block(i + 1, indent + 4,
-                                               local_seen, in_group=True)
-                    block.append({"kind": "group", "times": times,
-                                  "items": sub_items})
-                    continue
                 eq = line.find("=")
                 if eq < 0:
                     raise DslError("语句缺少 '='")
@@ -571,8 +580,6 @@ def parse(text):
                 cmd = toks[0][1]
                 if cmd not in _KNOWN_COMMANDS:
                     raise DslError(f"未知命令：{cmd}")
-                if cmd == "group":
-                    raise DslError("group 需要以 'group(...):' 开头且不含 '='")
                 if len(toks) < 3 or not (toks[1][0] == "op"
                                          and toks[1][1] == "("):
                     raise DslError(f"{cmd} 命令缺少左括号")
@@ -590,7 +597,7 @@ def parse(text):
         items, _ = parse_block(0, 0, seen)
     except DslError as e:
         return None, str(e)
-    return items, None
+    return {"repeat": repeat, "items": items}, None
 
 
 # --------------------------------------------------------------------------- #
@@ -688,18 +695,19 @@ def _line_for(item):
 
 
 def _item_lines(item):
-    """把配置项序列化为若干行 DSL（group 递归展开缩进）。"""
-    if item["kind"] == "group":
-        out = [f"group({item['times']}):"]
-        for sub in item.get("items", []):
-            out += ["    " + ln for ln in _item_lines(sub)]
-        return out
+    """把一个配置项序列化为一（或多）行 DSL。"""
     return [_line_for(item)]
 
 
-def serialize(items):
-    """把配置列表序列化为 DSL 文本（每行一条语句，group 递归缩进）。"""
+def serialize(config):
+    """把配置 dict 序列化为 DSL 文本（每行一条语句）。
+
+    config 形如 {"repeat": {...} | None, "items": [...]}；勾选多测模式时
+    首行输出“# 多测模式：重复 N 次”。"""
     out = []
-    for it in items:
+    repeat = (config or {}).get("repeat")
+    if repeat and repeat.get("enabled"):
+        out.append(f"# {_REPEAT_COMMENT}：重复 {repeat.get('count', '1')} 次")
+    for it in (config or {}).get("items", []):
         out += _item_lines(it)
     return "\n".join(out)
