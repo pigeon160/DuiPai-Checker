@@ -7,9 +7,11 @@ pub mod error;
 pub mod expr;
 pub mod parser;
 pub mod serializer;
+pub mod validate;
 
 pub use ast::{Config, ElemType, GraphType, Item, RepeatMode, VarKind, Weight};
 pub use error::{DslError, DslResult};
-pub use expr::{eval_expr, parse_expr, tokenize, ExprNode, Tok};
+pub use expr::{collect_names, eval_expr, parse_expr, tokenize, ExprNode, Tok};
 pub use parser::{parse, KNOWN_COMMANDS};
 pub use serializer::serialize;
+pub use validate::validate;

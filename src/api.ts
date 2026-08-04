@@ -58,6 +58,8 @@ export interface Weight {
 export interface Item {
   name: string;
   kind: VarKind;
+  /** 该语句在 DSL 文本中的行号（1 起）。 */
+  line: number;
 }
 
 export interface RepeatMode {
@@ -76,6 +78,16 @@ export function ping(): Promise<string> {
 
 export function dslParse(text: string): Promise<Config> {
   return invoke<Config>("dsl_parse", { text });
+}
+
+/** 解析 + 静态校验：语法错误走 Err，校验错误走 errors 列表（不阻断加载）。 */
+export interface ParseChecked {
+  config: Config;
+  errors: DslError[];
+}
+
+export function dslParseChecked(text: string): Promise<ParseChecked> {
+  return invoke<ParseChecked>("dsl_parse_checked", { text });
 }
 
 export function dslSerialize(config: Config): Promise<string> {

@@ -10,7 +10,9 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@tauri-apps/api": "^2",
+    "monaco-editor": "^0.56.0",
     "react": "^19",
     "react-dom": "^19"
   },

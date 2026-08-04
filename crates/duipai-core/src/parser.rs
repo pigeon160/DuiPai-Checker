@@ -1,12 +1,11 @@
 //! 行级 DSL 解析：文本 -> IR（移植 legacy/dsl.py 的 parse）。
 //!
-//! Phase 1 支持命令：`int` `float` `ints` `floats` `matrix` `matf`；
-//! 其余命令（perm/tree/graph/str/strs/binseq/intervals/points/ring/base_ring）
-//! 已列入已知命令表，报“暂不支持”，Phase 2 补齐。
+//! 支持全部命令：`int` `float` `ints` `floats` `matrix` `matf` `perm` `tree`
+//! `graph` `str` `strs` `binseq` `intervals` `points` `ring` `base_ring`。
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{Config, ElemType, Item, RepeatMode, VarKind};
+use crate::ast::{Config, ElemType, GraphType, Item, RepeatMode, VarKind, Weight};
 use crate::error::{DslError, DslResult};
 use crate::expr::{tokenize, Tok};
 
@@ -16,10 +15,9 @@ pub const KNOWN_COMMANDS: &[&str] = &[
     "str", "strs", "binseq", "intervals", "points", "ring", "base_ring",
 ];
 
-/// Phase 1 已实现的命令。
-const SUPPORTED_COMMANDS: &[&str] = &["int", "float", "ints", "floats", "matrix", "matf"];
-
 const REPEAT_COMMENT: &str = "多测模式";
+
+const DEFAULT_CHARSET: &str = "abcdefghijklmnopqrstuvwxyz";
 
 fn is_name(s: &str) -> bool {
     let mut chars = s.chars();
@@ -109,7 +107,10 @@ fn split_kw_args(toks: &[Tok]) -> DslResult<(Vec<Vec<Tok>>, HashMap<String, Stri
                 if kw.contains_key(&kname) {
                     return Err(DslError::bare(format!("关键字参数重复：{kname}")));
                 }
-                let v = expr_text(&arg[i + 1..]);
+                let mut v = expr_text(&arg[i + 1..]);
+                if kname == "type" {
+                    v = v.trim().trim_matches('"').trim().to_string();
+                }
                 kw.insert(kname, v);
             }
             _ => pos.push(arg),
@@ -118,19 +119,76 @@ fn split_kw_args(toks: &[Tok]) -> DslResult<(Vec<Vec<Tok>>, HashMap<String, Stri
     Ok((pos, kw))
 }
 
+/// 判断表达式 token 是否为 `fname( ... )` 调用，返回参数文本列表（失败返回 None）。
+fn is_range_call(toks: &[Tok], fname: &str) -> Option<Vec<String>> {
+    if toks.len() < 3 {
+        return None;
+    }
+    if !matches!(toks.first(), Some(Tok::Name(n)) if n == fname) {
+        return None;
+    }
+    if !matches!(toks.get(1), Some(Tok::Op(s)) if s == "(") {
+        return None;
+    }
+    if !matches!(toks.last(), Some(Tok::Op(s)) if s == ")") {
+        return None;
+    }
+    let inner = split_args(&toks[2..toks.len() - 1]);
+    if inner.is_empty() || inner.last().map_or(true, |x| x.is_empty()) {
+        return None;
+    }
+    let n = inner.len();
+    let ok = match fname {
+        "int" => n == 2,
+        "float" => (2..=3).contains(&n),
+        _ => return None,
+    };
+    if !ok {
+        return None;
+    }
+    Some(inner.iter().map(|x| expr_text(x)).collect())
+}
+
+/// 边权 / 节点权值参数 token -> 权值描述。`none` 或空表示无。
+fn weight_to_item(toks: &[Tok]) -> DslResult<Option<Weight>> {
+    if toks.is_empty() {
+        return Ok(None);
+    }
+    if matches!(toks, [Tok::Name(n)] if n.as_str() == "none") {
+        return Ok(None);
+    }
+    if let Some(r) = is_range_call(toks, "int") {
+        return Ok(Some(Weight {
+            kind: ElemType::Int,
+            min: r[0].clone(),
+            max: r[1].clone(),
+            prec: "6".to_string(),
+        }));
+    }
+    if let Some(r) = is_range_call(toks, "float") {
+        return Ok(Some(Weight {
+            kind: ElemType::Float,
+            min: r[0].clone(),
+            max: r[1].clone(),
+            prec: if r.len() == 3 { r[2].clone() } else { "6".to_string() },
+        }));
+    }
+    Err(DslError::bare(
+        "边权参数必须是 int(a,b) 或 float(a,b[,prec])",
+    ))
+}
+
+/// 解析 `w=` / `val=` 关键字参数（值为表达式文本）。
+fn weight_from_kw(v: &str) -> DslResult<Option<Weight>> {
+    let toks = tokenize(v)?;
+    weight_to_item(&toks)
+}
+
 /// 解析单条命令的参数为统一配置项。
 fn parse_cmd(name: &str, cmd: &str, args: &[Tok]) -> DslResult<Item> {
-    let (pos, kw) = split_kw_args(args)?;
+    let (mut pos, kw) = split_kw_args(args)?;
 
-    // 已知但未实现的命令给出清晰提示
-    if !SUPPORTED_COMMANDS.contains(&cmd) {
-        return Err(DslError::bare(format!(
-            "命令 {cmd} 暂不支持（当前版本仅支持 {}）",
-            SUPPORTED_COMMANDS.join(" / ")
-        )));
-    }
-
-    let arity = |lo: usize, hi: usize| -> DslResult<()> {
+    let arity = |pos: &[Vec<Tok>], lo: usize, hi: usize| -> DslResult<()> {
         if !(lo..=hi).contains(&pos.len()) {
             return Err(DslError::bare(format!(
                 "{cmd} 需要 {lo}~{hi} 个位置参数，实际 {} 个",
@@ -140,88 +198,220 @@ fn parse_cmd(name: &str, cmd: &str, args: &[Tok]) -> DslResult<Item> {
         Ok(())
     };
 
-    match cmd {
+    let kw_expr = |k: &str| kw.get(k).cloned();
+
+    let item = match cmd {
         "int" => {
-            arity(2, 2)?;
-            Ok(Item {
-                name: name.to_string(),
-                kind: VarKind::Int {
-                    min: expr_text(&pos[0]),
-                    max: expr_text(&pos[1]),
-                },
-            })
+            arity(&pos, 2, 2)?;
+            VarKind::Int {
+                min: expr_text(&pos[0]),
+                max: expr_text(&pos[1]),
+            }
         }
         "float" => {
-            arity(2, 3)?;
-            let prec = kw
-                .get("prec")
-                .cloned()
-                .unwrap_or_else(|| {
+            arity(&pos, 2, 3)?;
+            VarKind::Float {
+                min: expr_text(&pos[0]),
+                max: expr_text(&pos[1]),
+                prec: kw_expr("prec").unwrap_or_else(|| {
                     if pos.len() == 3 {
                         expr_text(&pos[2])
                     } else {
                         "6".to_string()
                     }
-                });
-            Ok(Item {
-                name: name.to_string(),
-                kind: VarKind::Float {
-                    min: expr_text(&pos[0]),
-                    max: expr_text(&pos[1]),
-                    prec,
-                },
-            })
+                }),
+            }
         }
         "ints" | "floats" => {
-            arity(3, 4)?;
-            let prec = kw
-                .get("prec")
-                .cloned()
-                .unwrap_or_else(|| {
+            arity(&pos, 3, 4)?;
+            VarKind::Array {
+                elem_type: if cmd == "ints" { ElemType::Int } else { ElemType::Float },
+                el_min: expr_text(&pos[1]),
+                el_max: expr_text(&pos[2]),
+                prec: kw_expr("prec").unwrap_or_else(|| {
                     if pos.len() == 4 {
                         expr_text(&pos[3])
                     } else {
                         "6".to_string()
                     }
-                });
-            Ok(Item {
-                name: name.to_string(),
-                kind: VarKind::Array {
-                    elem_type: if cmd == "ints" { ElemType::Int } else { ElemType::Float },
-                    el_min: expr_text(&pos[1]),
-                    el_max: expr_text(&pos[2]),
-                    prec,
-                    rows: "1".to_string(),
-                    cols: expr_text(&pos[0]),
-                },
-            })
+                }),
+                rows: "1".to_string(),
+                cols: expr_text(&pos[0]),
+            }
         }
         "matrix" | "matf" => {
-            arity(4, 5)?;
-            let prec = kw
-                .get("prec")
-                .cloned()
-                .unwrap_or_else(|| {
+            arity(&pos, 4, 5)?;
+            VarKind::Array {
+                elem_type: if cmd == "matrix" { ElemType::Int } else { ElemType::Float },
+                el_min: expr_text(&pos[2]),
+                el_max: expr_text(&pos[3]),
+                prec: kw_expr("prec").unwrap_or_else(|| {
                     if pos.len() == 5 {
                         expr_text(&pos[4])
                     } else {
                         "6".to_string()
                     }
-                });
-            Ok(Item {
-                name: name.to_string(),
-                kind: VarKind::Array {
-                    elem_type: if cmd == "matrix" { ElemType::Int } else { ElemType::Float },
-                    el_min: expr_text(&pos[2]),
-                    el_max: expr_text(&pos[3]),
-                    prec,
+                }),
+                rows: expr_text(&pos[0]),
+                cols: expr_text(&pos[1]),
+            }
+        }
+        "perm" => {
+            arity(&pos, 1, 1)?;
+            VarKind::Perm {
+                n: expr_text(&pos[0]),
+            }
+        }
+        "str" | "strs" => {
+            arity(&pos, 1, 3)?;
+            let mut charset = kw_expr("charset").map(|s| s.trim().trim_matches('"').to_string());
+            if charset.is_none() {
+                for (i, p) in pos.iter().enumerate() {
+                    if matches!(p.as_slice(), [Tok::Str(_)]) {
+                        charset = Some(expr_text(p).trim_matches('"').to_string());
+                        pos.remove(i);
+                        break;
+                    }
+                }
+            }
+            let charset = charset.unwrap_or_else(|| DEFAULT_CHARSET.to_string());
+            if cmd == "str" {
+                arity(&pos, 1, 1)?;
+                VarKind::String {
+                    rows: "1".to_string(),
+                    cols: expr_text(&pos[0]),
+                    charset,
+                }
+            } else {
+                arity(&pos, 2, 2)?;
+                VarKind::String {
                     rows: expr_text(&pos[0]),
                     cols: expr_text(&pos[1]),
-                },
-            })
+                    charset,
+                }
+            }
         }
-        _ => unreachable!("SUPPORTED_COMMANDS 已过滤"),
-    }
+        "binseq" => {
+            arity(&pos, 2, 2)?;
+            VarKind::Binseq {
+                n: expr_text(&pos[0]),
+                k: expr_text(&pos[1]),
+            }
+        }
+        "intervals" => {
+            arity(&pos, 3, 3)?;
+            VarKind::Intervals {
+                n: expr_text(&pos[0]),
+                lo: expr_text(&pos[1]),
+                hi: expr_text(&pos[2]),
+            }
+        }
+        "points" => {
+            arity(&pos, 5, 5)?;
+            VarKind::Points {
+                n: expr_text(&pos[0]),
+                xlo: expr_text(&pos[1]),
+                xhi: expr_text(&pos[2]),
+                ylo: expr_text(&pos[3]),
+                yhi: expr_text(&pos[4]),
+            }
+        }
+        "tree" => {
+            arity(&pos, 1, 2)?;
+            let mut w = None;
+            let mut val = None;
+            if pos.len() == 2 {
+                w = weight_to_item(&pos[1])?;
+            }
+            if let Some(v) = kw_expr("w") {
+                w = weight_from_kw(&v)?;
+            }
+            if let Some(v) = kw_expr("val") {
+                val = weight_from_kw(&v)?;
+            }
+            VarKind::Tree {
+                n: expr_text(&pos[0]),
+                w,
+                val,
+            }
+        }
+        "ring" => {
+            arity(&pos, 1, 1)?;
+            VarKind::Graph {
+                gtype: GraphType::Ring,
+                n: expr_text(&pos[0]),
+                m: expr_text(&pos[0]),
+                directed: false,
+                connected: true,
+                k: None,
+                w: None,
+                val: kw_expr("val").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
+            }
+        }
+        "base_ring" => {
+            arity(&pos, 2, 2)?;
+            VarKind::Graph {
+                gtype: GraphType::BaseRing,
+                n: expr_text(&pos[0]),
+                m: expr_text(&pos[0]),
+                directed: false,
+                connected: true,
+                k: Some(expr_text(&pos[1])),
+                w: None,
+                val: kw_expr("val").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
+            }
+        }
+        "graph" => {
+            arity(&pos, 3, 5)?;
+            let gtype = match kw_expr("type").as_deref() {
+                Some("dag") => GraphType::Dag,
+                Some("bipartite") => GraphType::Bipartite,
+                Some(t) => {
+                    return Err(DslError::bare(format!("未知图类型：{t}")));
+                }
+                _ => GraphType::General,
+            };
+            let directed = match gtype {
+                GraphType::Dag => true,
+                GraphType::Bipartite => false,
+                _ => {
+                    let d = expr_text(&pos[2]);
+                    d == "1" || d.eq_ignore_ascii_case("true")
+                }
+            };
+            let connected = {
+                let c = expr_text(&pos[3]);
+                c == "1" || c.eq_ignore_ascii_case("true")
+            };
+            let mut w = None;
+            let mut val = None;
+            if pos.len() == 5 {
+                w = weight_to_item(&pos[4])?;
+            }
+            if let Some(v) = kw_expr("w") {
+                w = weight_from_kw(&v)?;
+            }
+            if let Some(v) = kw_expr("val") {
+                val = weight_from_kw(&v)?;
+            }
+            VarKind::Graph {
+                gtype,
+                n: expr_text(&pos[0]),
+                m: expr_text(&pos[1]),
+                directed,
+                connected,
+                k: None,
+                w,
+                val,
+            }
+        }
+        _ => return Err(DslError::bare(format!("未知命令：{cmd}"))),
+    };
+    Ok(Item {
+        name: name.to_string(),
+        kind: item,
+        line: 0, // 行号由 parse 回填
+    })
 }
 
 /// 解析单条语句行。`seen` 累积已定义变量名。
@@ -261,7 +451,7 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
     }
     let item = parse_cmd(name, &cmd, &toks[2..toks.len() - 1]).map_err(|e| e.with_line(lineno))?;
     seen.insert(name.to_string());
-    Ok(item)
+    Ok(Item { line: lineno, ..item })
 }
 
 /// 从 DSL 文本顶部读取多测模式注释。

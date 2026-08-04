@@ -27,6 +27,8 @@ pub struct Config {
 pub struct Item {
     pub name: String,
     pub kind: VarKind,
+    /// 该语句在 DSL 文本中的行号（1 起；供错误定位与前端高亮）。
+    pub line: usize,
 }
 
 /// 元素类型（数组 / 权值）。

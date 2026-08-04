@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use duipai_core::{eval_expr, parse, serialize, DslError};
+use duipai_core::{eval_expr, parse, serialize, validate};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::SeedableRng;
 
 fn seeded() -> StdRng {
     StdRng::seed_from_u64(42)
@@ -109,10 +109,49 @@ fn err_unknown_command() {
 }
 
 #[test]
-fn err_unsupported_command() {
-    let e = parse("p = perm(5)").expect_err("should fail");
-    assert_eq!(e.line, Some(1));
-    assert!(e.message.contains("暂不支持"), "{e}");
+fn full_commands_roundtrip() {
+    let text = "\
+n = int(1, 100)
+p = perm(n)
+s = str(10)
+s2 = strs(3, 5, \"01\")
+b = binseq(n, 3)
+iv = intervals(n, 1, 10)
+ps = points(n, 0, 9, 0, 9)
+t = tree(n)
+tw = tree(n, int(1, 100))
+tv = tree(n, w=float(0, 1, 4), val=int(1, 9))
+g = graph(n, int(n, n*n), 1, 0)
+gd = graph(n, 10, 1, 0, type=\"dag\")
+gb = graph(n, 10, 0, 0, type=\"bipartite\")
+gw = graph(n, 20, 1, 1, w=int(1, 10), val=float(0, 1))
+r = ring(5)
+br = base_ring(n, 3)
+";
+    let cfg = parse(text).expect("parse all commands");
+    assert_eq!(cfg.items.len(), 16);
+    let out = serialize(&cfg).expect("serialize");
+    let cfg2 = parse(&out).expect("re-parse");
+    assert_eq!(cfg, cfg2, "全命令往返 IR 一致");
+}
+
+#[test]
+fn err_unknown_gtype() {
+    let e = parse("g = graph(5, 5, 1, 0, type=\"foo\")").expect_err("should fail");
+    assert!(e.message.contains("未知图类型"), "{e}");
+}
+
+#[test]
+fn err_bad_weight() {
+    let e = parse("t = tree(5, 2*n)").expect_err("should fail");
+    assert!(e.message.contains("边权参数必须是"), "{e}");
+}
+
+#[test]
+fn err_bad_charset_position() {
+    // charset 必须是字符串字面量位置参数
+    let e = parse("s = str(10, abc)").expect_err("should fail");
+    assert!(e.message.contains("需要 1~1 个位置参数"), "{e}");
 }
 
 #[test]
@@ -189,7 +228,7 @@ fn expr_arithmetic() {
 
 #[test]
 fn expr_int_range() {
-    let mut env = HashMap::new();
+    let env = HashMap::new();
     let mut rng = seeded();
     for _ in 0..200 {
         let v = eval_expr("int(1, 100)", &env, &mut rng).unwrap();
@@ -203,7 +242,7 @@ fn expr_int_range() {
 
 #[test]
 fn expr_float_range() {
-    let mut env = HashMap::new();
+    let env = HashMap::new();
     let mut rng = seeded();
     for _ in 0..200 {
         let v = eval_expr("float(0, 1)", &env, &mut rng).unwrap();
@@ -218,7 +257,7 @@ fn expr_float_range() {
 
 #[test]
 fn expr_errors() {
-    let mut env = HashMap::new();
+    let env = HashMap::new();
     let mut rng = seeded();
     let e = eval_expr("n + 1", &env, &mut rng).expect_err("undefined");
     assert!(e.message.contains("引用了未定义的变量"), "{e}");
@@ -234,7 +273,7 @@ fn expr_errors() {
 
 #[test]
 fn expr_seeded_deterministic() {
-    let mut env = HashMap::new();
+    let env = HashMap::new();
     let mut rng1 = seeded();
     let mut rng2 = seeded();
     let a: Vec<f64> = (0..10).map(|_| eval_expr("int(1, 1000)", &env, &mut rng1).unwrap()).collect();
@@ -253,8 +292,104 @@ fn empty_and_whitespace_parse() {
 #[test]
 fn unknown_ast_node_string_in_expr() {
     // 字符串字面量在求值位置应报错（字符集参数不进求值）
-    let mut env = HashMap::new();
+    let env = HashMap::new();
     let mut rng = seeded();
     let e = eval_expr("\"abc\"", &env, &mut rng).expect_err("str node");
     assert!(e.message.contains("未知 AST 节点"), "{e}");
+}
+
+// --------------------------------------------------------------------------- //
+// 静态校验
+// --------------------------------------------------------------------------- //
+
+#[test]
+fn validate_ref_rule() {
+    // 数组不可作为引用源
+    let cfg = parse("a = ints(5, 1, 9)\nn = int(a, 100)").expect("parse");
+    let errs = validate(&cfg);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].message.contains("不可作为引用源"), "{errs:?}");
+    assert_eq!(errs[0].line, Some(2));
+}
+
+#[test]
+fn validate_undefined_ref() {
+    let cfg = parse("n = int(m, 100)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("未定义的变量")), "{errs:?}");
+    // 前向引用同样拒绝
+    let cfg = parse("n = int(m, 100)\nm = int(1, 5)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("未定义的变量")), "{errs:?}");
+}
+
+#[test]
+fn validate_ref_scale_of_structure_ok() {
+    // perm/tree/graph 引用取其规模值，合法
+    let cfg = parse("t = tree(10)\na = ints(t, 1, 5)\np = perm(6)\ng = graph(8, 5, 0, 0)\nm = int(p + g, t)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+}
+
+#[test]
+fn validate_const_range() {
+    let cfg = parse("n = int(5, 4)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("最小值不能大于最大值")), "{errs:?}");
+}
+
+#[test]
+fn validate_perm_size() {
+    let cfg = parse("p = perm(0)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("n 应 >= 1")), "{errs:?}");
+}
+
+#[test]
+fn validate_graph_m_limit() {
+    let cfg = parse("g = graph(3, 10, 0, 0)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("超过上限")), "{errs:?}");
+    // 无向 n=3 上限 3，m=4 应报错
+    let cfg = parse("g = graph(3, 4, 0, 0)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("超过上限")), "{errs:?}");
+}
+
+#[test]
+fn validate_connected_min_edges() {
+    let cfg = parse("g = graph(5, 3, 0, 1)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("连通图要求")), "{errs:?}");
+}
+
+#[test]
+fn validate_binseq_k() {
+    let cfg = parse("b = binseq(5, 6)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("0~n 之间")), "{errs:?}");
+}
+
+#[test]
+fn validate_clean_config() {
+    let text = "\
+n = int(1, 100)
+x = float(0, 1, 4)
+a = ints(n, 1, 100)
+p = perm(n)
+t = tree(n, int(1, 10))
+g = graph(n, 50, 1, 1, w=int(1, 9))
+r = ring(n)
+br = base_ring(n, 3)
+";
+    let cfg = parse(text).expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+}
+
+#[test]
+fn validate_bad_weight_range() {
+    let cfg = parse("t = tree(5, w=float(9, 1))").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("最小值不能大于最大值")), "{errs:?}");
 }

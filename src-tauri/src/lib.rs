@@ -6,6 +6,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::dsl_parse,
+            commands::dsl_parse_checked,
             commands::dsl_serialize,
             commands::expr_eval
         ])

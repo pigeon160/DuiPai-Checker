@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 
-use duipai_core::{eval_expr, parse, serialize, Config, DslError};
+use duipai_core::{eval_expr, parse, serialize, validate, Config, DslError};
+use serde::Serialize;
 
 /// 连通性检查。
 #[tauri::command]
@@ -14,6 +15,21 @@ pub fn ping() -> String {
 #[tauri::command]
 pub fn dsl_parse(text: String) -> Result<Config, DslError> {
     parse(&text)
+}
+
+/// 解析 + 静态校验的结果（校验错误不阻断 IR 加载，供前端高亮错误行）。
+#[derive(Serialize)]
+pub struct ParseChecked {
+    pub config: Config,
+    pub errors: Vec<DslError>,
+}
+
+/// DSL 文本 -> IR 配置 + 校验错误列表。语法错误仍以 Err 返回。
+#[tauri::command]
+pub fn dsl_parse_checked(text: String) -> Result<ParseChecked, DslError> {
+    let config = parse(&text)?;
+    let errors = validate(&config);
+    Ok(ParseChecked { config, errors })
 }
 
 /// IR 配置 -> DSL 文本（规范化）。

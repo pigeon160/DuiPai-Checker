@@ -378,6 +378,24 @@ pub fn eval_node(
     }
 }
 
+/// 收集 AST 中引用的全部变量名。
+pub fn collect_names(node: &ExprNode, out: &mut Vec<String>) {
+    match node {
+        ExprNode::Name(n) => out.push(n.clone()),
+        ExprNode::Neg(x) => collect_names(x, out),
+        ExprNode::Bin { l, r, .. } => {
+            collect_names(l, out);
+            collect_names(r, out);
+        }
+        ExprNode::Call { args, .. } => {
+            for a in args {
+                collect_names(a, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 解析并求值一个表达式字符串。语法错误会被包装为
 /// `表达式 {src:?} 语法错误：...`，求值错误原样抛出。
 pub fn eval_expr(
