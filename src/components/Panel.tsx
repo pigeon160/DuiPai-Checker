@@ -20,7 +20,12 @@ export function Panel({
   children: ReactNode;
 }) {
   const style: React.CSSProperties = {
-    flex: collapsed ? "0 0 0px" : basis != null ? `0 0 ${basis}px` : "0 0 auto",
+    // 折叠时高度 = 标题栏（children 不渲染）；basis 仅在展开时生效
+    flex: collapsed
+      ? "0 0 auto"
+      : basis != null
+        ? `0 0 ${basis}px`
+        : "0 0 auto",
   };
   return (
     <section
