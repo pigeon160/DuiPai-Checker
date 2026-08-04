@@ -59,7 +59,21 @@ export default function VariableList({
       n += 1;
       name = `v${n}`;
     }
-    onChangeItems([...items, { ...makeItem(newKind), name }]);
+    const item = { ...makeItem(newKind), name };
+    // 行类型：行内项默认名（n/m）也自动重命名为全局未用名，避免跨行重名
+    if (Object.keys(newKind)[0] === "Line") {
+      const line = (newKind as { Line: { rows: string; items: { name: string }[] } }).Line;
+      const nextItems = line.items.map((it) => {
+        while (used.has(name)) {
+          n += 1;
+          name = `v${n}`;
+        }
+        used.add(name);
+        return { ...it, name };
+      });
+      item.kind = { Line: { ...line, items: nextItems } } as typeof item.kind;
+    }
+    onChangeItems([...items, item]);
   };
 
   const reorder = (from: number, to: number) => {
