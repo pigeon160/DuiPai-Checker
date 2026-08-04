@@ -170,16 +170,31 @@ function LineItemEditor({
   const key = itemKindKey(item.kind);
   const k = item.kind as Record<string, unknown>;
   const nameErr = nameError(item.name, nameTaken);
+  const [dupErr, setDupErr] = useState<string | null>(null);
+
+  // 重名即时阻止：目标名已被占用时回退输入并短暂提示
+  const handleName = (raw: string) => {
+    const err = nameError(raw, nameTaken);
+    if (err && err.includes("重复")) {
+      setDupErr(err);
+      setTimeout(() => setDupErr(null), 2000);
+      return;
+    }
+    setDupErr(null);
+    onChange({ ...item, name: raw });
+  };
+
   return (
-    <span className={`multi-part${nameErr ? " invalid" : ""}`}>
+    <span className={`multi-part${nameErr || dupErr ? " invalid" : ""}`}>
       <input
         className="name-input small-name"
         value={item.name}
-        onChange={(e) => onChange({ ...item, name: e.target.value })}
+        onChange={(e) => handleName(e.target.value)}
         placeholder="名字"
-        title={nameErr ?? "该数名字"}
+        title={dupErr ?? nameErr ?? "该数名字"}
         spellCheck={false}
       />
+      {dupErr && <span className="inline-err">{dupErr}</span>}
       <select
         value={key}
         title="行内项类型"
@@ -639,11 +654,21 @@ export default function VariableRow({
           <input
             className={`name-input${nameErr ? " invalid" : ""}`}
             value={item.name}
-            onChange={(e) => onName(e.target.value)}
+            onChange={(e) => {
+              // 重名即时阻止（多名字转换逻辑在 handleNameChange 中已保留）
+              const err = nameError(e.target.value, nameTaken);
+              if (err && err.includes("重复")) {
+                return;
+              }
+              onName(e.target.value);
+            }}
             placeholder="变量名"
             title={nameErr ?? "变量名"}
             spellCheck={false}
           />
+          {nameErr?.includes("重复") && (
+            <span className="inline-err">{nameErr}</span>
+          )}
           <span className="kind-badge" style={{ background: badge.bg, color: badge.fg }}>
             {kindLabel(item.kind)}
           </span>
