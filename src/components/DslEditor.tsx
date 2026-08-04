@@ -30,6 +30,30 @@ export default function DslEditor({
     editorRef.current = editor;
     editor.onDidFocusEditorText(() => onFocusChange(true));
     editor.onDidBlurEditorText(() => onFocusChange(false));
+
+    // Monaco 吞掉滚轮：滚到顶/底且方向一致时转发给整页（.split 滚动）
+    const dom = editor.getDomNode();
+    if (dom) {
+      const handler = (e: WheelEvent) => {
+        const scrollTop = editor.getScrollTop();
+        const viewH = editor.getLayoutInfo().height;
+        const max = editor.getScrollHeight() - viewH;
+        const up = e.deltaY < 0;
+        const down = e.deltaY > 0;
+        const atTop = scrollTop <= 0;
+        const atBottom = scrollTop >= max - 1;
+        const splitEl = document.querySelector<HTMLElement>(".split");
+        if (!splitEl) return;
+        const pageAtTop = splitEl.scrollTop <= 0;
+        const pageAtBottom =
+          splitEl.scrollTop + splitEl.clientHeight >= splitEl.scrollHeight - 1;
+        if ((up && atTop && !pageAtTop) || (down && atBottom && !pageAtBottom)) {
+          e.preventDefault();
+          splitEl.scrollTop += e.deltaY;
+        }
+      };
+      dom.addEventListener("wheel", handler, { passive: false });
+    }
   };
 
   useEffect(() => {

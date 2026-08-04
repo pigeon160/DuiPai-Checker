@@ -152,6 +152,9 @@ export default function App() {
     return () => clearTimeout(t);
   }, [dsl]);
 
+  // Monaco 会吞掉滚轮事件：滚动到顶/底且方向一致时，把滚动转发给整页。
+  // 监听器在 DslEditor onMount 中绑定（见 components/DslEditor.tsx）。
+
   // DSL -> 图形化（点“应用”）
   const applyFromDsl = useCallback(async () => {
     try {
