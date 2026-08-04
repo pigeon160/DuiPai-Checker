@@ -377,7 +377,8 @@ function LineHeadControls({
 }) {
   const { rows, items } = (kind as { Line: { rows: string; items: LineItem[] } }).Line;
   const [rowsError, setRowsError] = useState<string | null>(null);
-  const repeatOn = rows.trim() !== "" && rows.trim() !== "1";
+  // 空串也视为重复态：删空后输入框保留，可继续输入（而不是整个消失）
+  const repeatOn = rows.trim() !== "1";
   const setRows = (r: string) => onKind({ Line: { rows: r, items } } as unknown as VarKind);
   const setItems = (items: LineItem[]) => onKind({ Line: { rows, items } } as unknown as VarKind);
 
