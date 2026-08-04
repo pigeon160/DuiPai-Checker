@@ -18,16 +18,16 @@ pub struct RepeatMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Config {
     pub repeat: Option<RepeatMode>,
-    /// 按定义顺序排列的变量列表（顺序即生成顺序）。
+    /// 按定义顺序排列的语句列表（顺序即生成顺序）。
     pub items: Vec<Item>,
 }
 
-/// 单条变量定义。
+/// 顶层语句（行块或数组/树/图等命令）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Item {
     pub name: String,
     pub kind: VarKind,
-    /// 该语句在 DSL 文本中的行号（1 起；供错误定位与前端高亮）。
+    /// 该语句起始行号（1 起；供错误定位与前端高亮）。
     pub line: usize,
 }
 
@@ -70,26 +70,33 @@ pub struct Weight {
     pub prec: String,
 }
 
-/// 一行多赋值中的单个项：`n = int(1, 100), m = 2*n` 中一个 name = expr。
+/// 行块内的单个输出项（行内项，等级低于行）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MultiPart {
+pub struct LineItem {
     pub name: String,
-    /// 标量表达式原文（int()/float() 随机调用、算术、引用均可）
-    pub expr: String,
+    pub kind: LineItemKind,
 }
 
-/// 变量类型与参数（字段均为表达式字符串，bool 除外）。
+/// 行内项类型（只能输出单个值）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum LineItemKind {
+    /// 整数：`整数 n: 1, 100`
+    Int { min: String, max: String },
+    /// 浮点：`浮点 x: 0, 1, 4`
+    Float { min: String, max: String, prec: String },
+    /// 表达式：`表达式 e: 2 * n`（任意标量表达式）
+    Scalar { expr: String },
+    /// 文本：`文本 s: "---"`（固定字面量，不可引用）
+    Text { text: String },
+    /// 字符串：`字符串 c: 10, "ab"`（长度可为表达式，不可引用）
+    Str { len: String, charset: String },
+}
+
+/// 顶层变量类型（行块或命令）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum VarKind {
-    /// 整数变量：`n = int(min, max)`
-    Int { min: String, max: String },
-    /// 多赋值：`n = int(1, 100), m = 2*n`——一行多个数，每项 name = expr；
-    /// `repeat(N)` 时输出 N 行（每行独立随机），rows 为行数表达式（默认 "1"）
-    Multi { rows: String, parts: Vec<MultiPart> },
-    /// 标量表达式绑定：`n = 2*m + 1`（任意表达式，值可被引用）
-    Scalar { expr: String },
-    /// 浮点变量：`x = float(min, max[, prec])`
-    Float { min: String, max: String, prec: String },
+    /// 行块：`行 (N):` + 缩进子项；重复时数值项数组化（引用须 n[k]）
+    Line { rows: String, items: Vec<LineItem> },
     /// 数组/矩阵：`ints/floats(cols, el_min, el_max[, prec])` 或
     /// `matrix/matf(rows, cols, el_min, el_max[, prec])`
     Array {
@@ -102,12 +109,6 @@ pub enum VarKind {
     },
     /// 排列：`p = perm(n)`
     Perm { n: String },
-    /// 字符串（单行用 `str(len[, "charset"])`，多行用 `strs(rows, len[, "charset"])`）
-    String {
-        rows: String,
-        cols: String,
-        charset: String,
-    },
     /// 0/1 序列：`b = binseq(n, k)`，一行 n 位，其中 k 个 1
     Binseq { n: String, k: String },
     /// 区间：`iv = intervals(n, lo, hi)`，n 行 `l r`

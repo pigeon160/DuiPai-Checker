@@ -28,8 +28,8 @@ export default function VariableList({
   const nameCount = new Map<string, number>();
   for (const it of items) {
     const key = Object.keys(it.kind)[0];
-    if (key === "Multi") {
-      for (const p of (it.kind as { Multi: { parts: { name: string }[] } }).Multi.parts) {
+    if (key === "Line") {
+      for (const p of (it.kind as { Line: { items: { name: string }[] } }).Line.items) {
         nameCount.set(p.name, (nameCount.get(p.name) ?? 0) + 1);
       }
     } else {
@@ -39,14 +39,7 @@ export default function VariableList({
   const nameTaken = (n: string) => (nameCount.get(n) ?? 0) > 1;
 
   const addItem = () => {
-    const used = new Set(items.map((i) => i.name));
-    let n = 1;
-    let name = "v1";
-    while (used.has(name)) {
-      n += 1;
-      name = `v${n}`;
-    }
-    onChangeItems([...items, makeItem(name, newKind)]);
+    onChangeItems([...items, makeItem(newKind)]);
   };
 
   const reorder = (from: number, to: number) => {

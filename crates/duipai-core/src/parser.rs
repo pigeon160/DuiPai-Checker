@@ -1,18 +1,38 @@
-//! 行级 DSL 解析：文本 -> IR（移植 legacy/dsl.py 的 parse）。
+//! DSL 解析：文本 -> IR（层级语法）。
 //!
-//! 支持全部命令：`int` `float` `ints` `floats` `matrix` `matf` `perm` `tree`
-//! `graph` `str` `strs` `binseq` `intervals` `points` `ring` `base_ring`。
+//! 顶层语句（缩进 0）：
+//!   - 行块：`行 (N):` + 缩进子项（整数/浮点/文本/表达式/字符串）
+//!   - 命令：`name = ints(...)` / `perm` / `tree` / `graph` / `ring` / `base_ring` /
+//!     `binseq` / `intervals` / `points` / `matrix` / `matf`
+//!
+//! 整数/浮点/字符串等标量类型**必须**放在行块内（缩进子项），顶层写会报错引导。
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{Config, ElemType, GraphType, Item, MultiPart, RepeatMode, VarKind, Weight};
+use crate::ast::{
+    Config, ElemType, GraphType, Item, LineItem, LineItemKind, RepeatMode, VarKind, Weight,
+};
 use crate::error::{DslError, DslResult};
 use crate::expr::{tokenize, Tok};
 
-/// 全部命令（保留字，不可用作变量名）。
+/// 顶层命令。
+pub const TOP_COMMANDS: &[&str] = &[
+    "ints", "floats", "matrix", "matf", "perm", "binseq", "intervals", "points",
+    "tree", "graph", "ring", "base_ring",
+];
+
+/// 行内项类型关键字。
+pub const LINE_ITEM_KINDS: &[&str] = &["整数", "浮点", "文本", "表达式", "字符串"];
+
+/// 已废弃但保留字（顶层写这些会报错引导）。
+pub const RETIRED_COMMANDS: &[&str] = &["int", "float", "str", "strs"];
+
+/// 全部保留字（不可用作变量名）。
 pub const KNOWN_COMMANDS: &[&str] = &[
-    "int", "float", "ints", "floats", "matrix", "matf", "perm", "tree", "graph",
-    "str", "strs", "binseq", "intervals", "points", "ring", "base_ring", "repeat",
+    "ints", "floats", "matrix", "matf", "perm", "binseq", "intervals", "points",
+    "tree", "graph", "ring", "base_ring", "repeat",
+    "行", "整数", "浮点", "文本", "表达式", "字符串",
+    "int", "float", "str", "strs",
 ];
 
 const REPEAT_COMMENT: &str = "多测模式";
@@ -192,9 +212,9 @@ fn weight_from_kw(v: &str) -> DslResult<Option<Weight>> {
     weight_to_item(&toks)
 }
 
-/// 解析单条命令的参数为统一类型（不处理变量名）。
+/// 解析顶层命令的参数为统一类型（不处理变量名）。
 fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
-    let (mut pos, kw) = split_kw_args(args)?;
+    let (pos, kw) = split_kw_args(args)?;
 
     let arity = |pos: &[Vec<Tok>], lo: usize, hi: usize| -> DslResult<()> {
         if !(lo..=hi).contains(&pos.len()) {
@@ -209,27 +229,6 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
     let kw_expr = |k: &str| kw.get(k).cloned();
 
     let item = match cmd {
-        "int" => {
-            arity(&pos, 2, 2)?;
-            VarKind::Int {
-                min: expr_text(&pos[0]),
-                max: expr_text(&pos[1]),
-            }
-        }
-        "float" => {
-            arity(&pos, 2, 3)?;
-            VarKind::Float {
-                min: expr_text(&pos[0]),
-                max: expr_text(&pos[1]),
-                prec: kw_expr("prec").unwrap_or_else(|| {
-                    if pos.len() == 3 {
-                        expr_text(&pos[2])
-                    } else {
-                        "6".to_string()
-                    }
-                }),
-            }
-        }
         "ints" | "floats" => {
             arity(&pos, 3, 4)?;
             VarKind::Array {
@@ -268,35 +267,6 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
             arity(&pos, 1, 1)?;
             VarKind::Perm {
                 n: expr_text(&pos[0]),
-            }
-        }
-        "str" | "strs" => {
-            arity(&pos, 1, 3)?;
-            let mut charset = kw_expr("charset").map(|s| s.trim().trim_matches('"').to_string());
-            if charset.is_none() {
-                for (i, p) in pos.iter().enumerate() {
-                    if matches!(p.as_slice(), [Tok::Str(_)]) {
-                        charset = Some(expr_text(p).trim_matches('"').to_string());
-                        pos.remove(i);
-                        break;
-                    }
-                }
-            }
-            let charset = charset.unwrap_or_else(|| DEFAULT_CHARSET.to_string());
-            if cmd == "str" {
-                arity(&pos, 1, 1)?;
-                VarKind::String {
-                    rows: "1".to_string(),
-                    cols: expr_text(&pos[0]),
-                    charset,
-                }
-            } else {
-                arity(&pos, 2, 2)?;
-                VarKind::String {
-                    rows: expr_text(&pos[0]),
-                    cols: expr_text(&pos[1]),
-                    charset,
-                }
             }
         }
         "binseq" => {
@@ -453,140 +423,237 @@ fn check_known_calls(node: &crate::expr::ExprNode) -> DslResult<()> {
     Ok(())
 }
 
-/// 解析单个 `name = expr` 赋值组，返回 (name, 类型)。
-///
-/// RHS 判定优先级：
-/// 1. 命令调用（ints/perm/tree/…）→ 命令语义（原行为）
-/// 2. `int(a,b[,p])` / `float(a,b[,p])` 简单形式 → Int/Float（GUI 快捷编辑态）
-/// 3. 其他任意标量表达式 → Scalar（`n = 2*m+1`）
-fn parse_assign(rhs_toks: &[Tok], lineno: usize) -> DslResult<VarKind> {
-    // 命令调用？
-    if let Some(Tok::Name(cmd)) = rhs_toks.first() {
-        if is_known(cmd) && matches!(rhs_toks.get(1), Some(Tok::Op(s)) if s == "(") {
-            if let Some(Tok::Op(s)) = rhs_toks.last() {
-                if s == ")" {
-                    if cmd == "repeat" {
+/// 解析行内项：`类型 名字: 参数`。
+fn parse_line_item(line: &str, lineno: usize, seen: &mut HashSet<String>) -> DslResult<LineItem> {
+    let toks = tokenize(line).map_err(|e| e.with_line(lineno))?;
+    let kind_kw = match toks.first() {
+        Some(Tok::Name(k)) if LINE_ITEM_KINDS.contains(&k.as_str()) => k.as_str(),
+        Some(Tok::Name(k)) if k == "行" => {
+            return Err(DslError::at(lineno, "行块不能嵌套在行内"));
+        }
+        Some(Tok::Name(_)) => {
+            return Err(DslError::at(lineno, "行内项类型必须是 整数/浮点/文本/表达式/字符串"));
+        }
+        _ => return Err(DslError::at(lineno, "行内项必须是「类型 名字: 参数」形式")),
+    };
+    let name = match toks.get(1) {
+        Some(Tok::Name(n)) => n.clone(),
+        _ => return Err(DslError::at(lineno, "行内项缺少名字（类型 名字: 参数）")),
+    };
+    check_name(&name, lineno, seen)?;
+    if !matches!(toks.get(2), Some(Tok::Op(s)) if s == ":") {
+        return Err(DslError::at(lineno, "行内项缺少冒号（类型 名字: 参数）"));
+    }    let args = split_args(&toks[3..]);
+    let arity = |lo: usize, hi: usize| -> DslResult<()> {
+        if !(lo..=hi).contains(&args.len()) {
+            return Err(DslError::at(
+                lineno,
+                format!("{kind_kw} 项需要 {lo}~{hi} 个参数，实际 {} 个", args.len()),
+            ));
+        }
+        Ok(())
+    };
+
+    let kind = match kind_kw {
+        "整数" => {
+            arity(2, 2)?;
+            LineItemKind::Int {
+                min: expr_text(&args[0]),
+                max: expr_text(&args[1]),
+            }
+        }
+        "浮点" => {
+            arity(2, 3)?;
+            LineItemKind::Float {
+                min: expr_text(&args[0]),
+                max: expr_text(&args[1]),
+                prec: if args.len() == 3 { expr_text(&args[2]) } else { "6".to_string() },
+            }
+        }
+        "文本" => {
+            arity(1, 1)?;
+            let text = match args[0].as_slice() {
+                [Tok::Str(s)] => s.clone(),
+                _ => return Err(DslError::at(lineno, "文本项参数必须是字符串字面量（\"内容\"）")),
+            };
+            if text.contains('"') || text.contains('\n') {
+                return Err(DslError::at(lineno, "文本内容不能包含双引号或换行"));
+            }
+            LineItemKind::Text { text }
+        }
+        "表达式" => {
+            arity(1, 1)?;
+            let expr = expr_text(&args[0]);
+            if expr.is_empty() {
+                return Err(DslError::at(lineno, "表达式项缺少表达式"));
+            }
+            let node = crate::expr::parse_expr(&expr).map_err(|e| e.with_line(lineno))?;
+            check_known_calls(&node).map_err(|e| e.with_line(lineno))?;
+            LineItemKind::Scalar { expr }
+        }
+        "字符串" => {
+            arity(1, 2)?;
+            let len = expr_text(&args[0]);
+            let mut charset: Option<String> = None;
+            if args.len() == 2 {
+                match args[1].as_slice() {
+                    [Tok::Str(s)] => charset = Some(s.clone()),
+                    _ => {
                         return Err(DslError::at(
                             lineno,
-                            "repeat(N) 只能用于一行多赋值（如 n = int(1, 5), m = 2*n, repeat(3)）",
+                            "字符串项字符集必须是字符串字面量（\"ab\"）",
                         ));
                     }
-                    return parse_cmd(cmd, &rhs_toks[2..rhs_toks.len() - 1])
-                        .map_err(|e| e.with_line(lineno));
                 }
             }
+            if len.is_empty() {
+                return Err(DslError::at(lineno, "字符串项缺少长度"));
+            }
+            let charset = charset.unwrap_or_else(|| DEFAULT_CHARSET.to_string());
+            LineItemKind::Str { len, charset }
         }
-    }
-    // int(a,b[,p]) / float(a,b[,p]) 简单形式 -> Int/Float
-    if let Some(r) = is_range_call(rhs_toks, "int") {
-        if r.len() == 2 {
-            return Ok(VarKind::Int {
-                min: r[0].clone(),
-                max: r[1].clone(),
-            });
-        }
-    }
-    if let Some(r) = is_range_call(rhs_toks, "float") {
-        let prec = if r.len() == 3 { r[2].clone() } else { "6".to_string() };
-        return Ok(VarKind::Float {
-            min: r[0].clone(),
-            max: r[1].clone(),
-            prec,
-        });
-    }
-    // 其他标量表达式
-    let expr = expr_text(rhs_toks);
-    if expr.is_empty() {
-        return Err(DslError::at(lineno, "缺少表达式"));
-    }
-    let node = crate::expr::parse_expr(&expr).map_err(|e| e.with_line(lineno))?;
-    check_known_calls(&node).map_err(|e| e.with_line(lineno))?;
-    Ok(VarKind::Scalar { expr })
+        _ => unreachable!("LINE_ITEM_KINDS 已过滤"),
+    };
+    seen.insert(name.clone());
+    Ok(LineItem { name, kind })
 }
 
-/// 解析单条语句行。`seen` 累积已定义变量名。
-///
-/// 一行 = 顶层逗号分隔的多个 `name = expr` 赋值：
-///   - `n = int(1, 100)`                     单赋值
-///   - `n = 2*m + 1`                          标量表达式
-///   - `n = int(1, 100), m = 2*n`             多赋值（一行输出多个数，每项可命名）
-fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> DslResult<Item> {
-    let line = line.trim();
-    let toks = tokenize(line).map_err(|e| e.with_line(lineno))?;
-
-    // 顶层逗号切分成若干个 `name = expr` 赋值组（最后可为 `repeat(N)` 行数标记）
-    let groups = split_args(&toks);
-    let mut assigns: Vec<(String, &[Tok])> = Vec::with_capacity(groups.len());
-    let mut repeat: Option<String> = None;
-    for group in &groups {
-        if group.is_empty() {
-            return Err(DslError::at(lineno, "语句缺少 '='"));
-        }
-        // 组内找顶层 '='
-        let mut eq_idx: Option<usize> = None;
-        let mut depth = 0usize;
-        for (i, tok) in group.iter().enumerate() {
-            match tok {
-                Tok::Op(s) if s == "(" => depth += 1,
+/// 解析行块：`行 (N):` + 缩进子项。返回 (Item, 消费的行数)。
+fn parse_line_block(
+    lines: &[&str],
+    start: usize,
+    seen: &mut HashSet<String>,
+) -> DslResult<(Item, usize)> {
+    let lineno = start + 1;
+    let toks = tokenize(lines[start]).map_err(|e| e.with_line(lineno))?;
+    // 行 [ ( N ) ] :
+    let mut p = 1usize;
+    let mut rows = "1".to_string();
+    if matches!(toks.get(p), Some(Tok::Op(s)) if s == "(") {
+        p += 1;
+        let mut depth = 1usize;
+        let mut inner: Vec<Tok> = Vec::new();
+        while p < toks.len() {
+            match &toks[p] {
+                Tok::Op(s) if s == "(" => {
+                    depth += 1;
+                    inner.push(toks[p].clone());
+                }
                 Tok::Op(s) if s == ")" => {
-                    if depth > 0 {
-                        depth -= 1;
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
                     }
+                    inner.push(toks[p].clone());
                 }
-                Tok::Op(s) if s == "=" && depth == 0 => {
-                    eq_idx = Some(i);
-                    break;
-                }
-                _ => {}
+                t => inner.push(t.clone()),
             }
+            p += 1;
         }
-        let eq = match eq_idx {
-            Some(i) => i,
-            None => {
-                // 无 '=' 的组只允许 `repeat(N)`（多赋值行数标记）
-                if matches!(group.as_slice(), [Tok::Name(n), Tok::Op(o), .., Tok::Op(c)]
-                    if n.as_str() == "repeat" && o == "(" && c == ")")
-                {
-                    if repeat.is_some() {
-                        return Err(DslError::at(lineno, "repeat(N) 只能出现一次"));
-                    }
-                    if group.len() < 4 {
-                        return Err(DslError::at(lineno, "repeat(N) 缺少行数表达式"));
-                    }
-                    let inner = expr_text(&group[2..group.len() - 1]);
-                    if inner.is_empty() {
-                        return Err(DslError::at(lineno, "repeat(N) 缺少行数表达式"));
-                    }
-                    crate::expr::parse_expr(&inner).map_err(|e| e.with_line(lineno))?;
-                    repeat = Some(inner);
-                    continue;
-                }
-                return Err(DslError::at(lineno, "语句缺少 '='"));
-            }
-        };
-        let name = expr_text(&group[..eq]);
-        if name.is_empty() {
-            return Err(DslError::at(lineno, "缺少变量名"));
+        if depth != 0 {
+            return Err(DslError::at(lineno, "行块行数表达式缺少右括号"));
         }
-        check_name(&name, lineno, seen)?;
-        assigns.push((name, &group[eq + 1..]));
+        let rows_expr = expr_text(&inner);
+        if rows_expr.is_empty() {
+            return Err(DslError::at(lineno, "行块行数表达式为空（行 (N):）"));
+        }
+        let node = crate::expr::parse_expr(&rows_expr).map_err(|e| e.with_line(lineno))?;
+        check_known_calls(&node).map_err(|e| e.with_line(lineno))?;
+        rows = rows_expr;
+        p += 1; // 跳过 ')'
+    }
+    if !matches!(toks.get(p), Some(Tok::Op(s)) if s == ":") {
+        return Err(DslError::at(lineno, "行块必须以「行 (N):」开头"));
+    }
+    if p + 1 != toks.len() {
+        return Err(DslError::at(lineno, "行块声明行有多余内容"));
     }
 
-    // 语句内部重名检测
-    let mut local: HashSet<String> = HashSet::new();
-    for (name, _) in &assigns {
-        if !local.insert(name.clone()) {
-            return Err(DslError::at(lineno, format!("变量名重复：{name}")));
+    // 缩进子项
+    let mut items: Vec<LineItem> = Vec::new();
+    let mut i = start + 1;
+    while i < lines.len() {
+        let raw = lines[i];
+        if raw.trim().is_empty() || raw.trim_start().starts_with('#') {
+            i += 1;
+            continue;
+        }
+        let indent = raw.len() - raw.trim_start_matches(' ').len();
+        if indent == 0 {
+            break;
+        }
+        items.push(parse_line_item(raw.trim(), i + 1, seen)?);
+        i += 1;
+    }
+    if items.is_empty() {
+        return Err(DslError::at(lineno, "行块内至少需要一个子项（整数/浮点/文本/表达式/字符串）"));
+    }
+    Ok((
+        Item {
+            name: String::new(),
+            kind: VarKind::Line { rows, items },
+            line: lineno,
+        },
+        i - start,
+    ))
+}
+
+/// 解析顶层命令语句：`name = cmd(...)`。
+fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> DslResult<Item> {
+    let toks = tokenize(line).map_err(|e| e.with_line(lineno))?;
+    let groups = split_args(&toks);
+    if groups.len() > 1 {
+        return Err(DslError::at(
+            lineno,
+            "顶层一行只允许一条语句；多个数请放入行块（行: 块 + 缩进子项）",
+        ));
+    }
+    let group = &groups[0];
+    // 组内找顶层 '='
+    let mut eq_idx: Option<usize> = None;
+    let mut depth = 0usize;
+    for (i, tok) in group.iter().enumerate() {
+        match tok {
+            Tok::Op(s) if s == "(" => depth += 1,
+            Tok::Op(s) if s == ")" => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            Tok::Op(s) if s == "=" && depth == 0 => {
+                eq_idx = Some(i);
+                break;
+            }
+            _ => {}
         }
     }
-
-    // 单赋值（repeat 标记只在多赋值有效）
-    if assigns.len() == 1 {
-        if repeat.is_some() {
-            return Err(DslError::at(lineno, "repeat(N) 只能用于一行多赋值"));
+    let eq = match eq_idx {
+        Some(i) => i,
+        None => return Err(DslError::at(lineno, "语句缺少 '='")),
+    };
+    let name = expr_text(&group[..eq]);
+    if name.is_empty() {
+        return Err(DslError::at(lineno, "缺少变量名"));
+    }
+    check_name(&name, lineno, seen)?;
+    let rhs = &group[eq + 1..];
+    let cmd = match rhs.first() {
+        Some(Tok::Name(c)) => c.as_str(),
+        _ => {
+            return Err(DslError::at(
+                lineno,
+                "顶层语句必须是数组/树/图等命令（name = ints(...)）；整数/浮点/表达式请放入行块",
+            ));
         }
-        let (name, rhs) = assigns.pop().unwrap();
-        let kind = parse_assign(rhs, lineno)?;
+    };
+    if TOP_COMMANDS.contains(&cmd) {
+        if !matches!(rhs.get(1), Some(Tok::Op(s)) if s == "(") {
+            return Err(DslError::at(lineno, format!("{cmd} 命令缺少左括号")));
+        }
+        if !matches!(rhs.last(), Some(Tok::Op(s)) if s == ")") {
+            return Err(DslError::at(lineno, format!("{cmd} 命令缺少右括号")));
+        }
+        let kind = parse_cmd(cmd, &rhs[2..rhs.len() - 1]).map_err(|e| e.with_line(lineno))?;
         seen.insert(name.clone());
         return Ok(Item {
             name,
@@ -594,69 +661,27 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
             line: lineno,
         });
     }
-
-    // 多赋值：每项必须是单行标量（命令限 int/float，其余按表达式）
-    let mut parts: Vec<MultiPart> = Vec::with_capacity(assigns.len());
-    for (name, rhs) in &assigns {
-        let kind = parse_assign(rhs, lineno)?;
-        let expr = match &kind {
-            VarKind::Int { min, max } => format!("int({min}, {max})"),
-            VarKind::Float { min, max, prec } => {
-                if prec == "6" {
-                    format!("float({min}, {max})")
-                } else {
-                    format!("float({min}, {max}, {prec})")
-                }
-            }
-            VarKind::Scalar { expr } => expr.clone(),
-            other => {
-                return Err(DslError::at(
-                    lineno,
-                    format!(
-                        "一行多个数时每项必须输出单个数值（{} 输出多行）",
-                        kind_name(other)
-                    ),
-                ));
-            }
-        };
-        parts.push(MultiPart {
-            name: name.clone(),
-            expr,
-        });
+    if RETIRED_COMMANDS.contains(&cmd) {
+        return Err(DslError::at(
+            lineno,
+            format!("{cmd} 已改为行内项：请放入行块（行: 块 + 缩进子项「类型 名字: 参数」）"),
+        ));
     }
-    for (name, _) in &assigns {
-        seen.insert(name.clone());
+    if LINE_ITEM_KINDS.contains(&cmd) || cmd == "行" {
+        return Err(DslError::at(
+            lineno,
+            format!("{cmd} 是行内项类型，必须缩进放在行块内"),
+        ));
     }
-    Ok(Item {
-        name: assigns
-            .iter()
-            .map(|(n, _)| n.as_str())
-            .collect::<Vec<_>>()
-            .join(","),
-        kind: VarKind::Multi {
-            rows: repeat.unwrap_or_else(|| "1".to_string()),
-            parts,
-        },
-        line: lineno,
-    })
-}
-
-/// 类型中文名（错误消息用）。
-fn kind_name(kind: &VarKind) -> &'static str {
-    match kind {
-        VarKind::Int { .. } => "整数",
-        VarKind::Float { .. } => "浮点",
-        VarKind::Multi { .. } => "多值",
-        VarKind::Scalar { .. } => "表达式",
-        VarKind::Array { .. } => "数组",
-        VarKind::Perm { .. } => "排列",
-        VarKind::String { .. } => "字符串",
-        VarKind::Binseq { .. } => "0/1 序列",
-        VarKind::Intervals { .. } => "区间",
-        VarKind::Points { .. } => "点集",
-        VarKind::Tree { .. } => "树",
-        VarKind::Graph { .. } => "图",
+    if is_known(cmd) {
+        return Err(DslError::at(lineno, format!("命令 {cmd} 只能用于行块内部")));
     }
+    Err(DslError::at(
+        lineno,
+        format!(
+            "未知命令：{cmd}（顶层语句必须是数组/树/图等命令；整数/浮点/表达式请放入行块）"
+        ),
+    ))
 }
 
 /// 从 DSL 文本顶部读取多测模式注释。
@@ -713,17 +738,29 @@ pub fn parse(text: &str) -> DslResult<Config> {
     let repeat = parse_repeat(&lines);
     let mut items: Vec<Item> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for (idx, raw) in lines.iter().enumerate() {
-        let lineno = idx + 1;
-        let trimmed = raw.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+    let mut i = 0usize;
+    while i < lines.len() {
+        let raw = lines[i];
+        if raw.trim().is_empty() || raw.trim_start().starts_with('#') {
+            i += 1;
             continue;
         }
         let indent = raw.len() - raw.trim_start_matches(' ').len();
         if indent > 0 {
-            return Err(DslError::at(lineno, "缩进不正确（顶层语句不能缩进）"));
+            return Err(DslError::at(
+                i + 1,
+                "缩进不正确：顶层语句不能缩进（行块子项除外）",
+            ));
         }
-        items.push(parse_statement(raw, lineno, &mut seen)?);
+        let toks = tokenize(raw.trim()).map_err(|e| e.with_line(i + 1))?;
+        if matches!(toks.first(), Some(Tok::Name(k)) if k == "行") {
+            let (item, consumed) = parse_line_block(&lines, i, &mut seen)?;
+            items.push(item);
+            i += consumed;
+        } else {
+            items.push(parse_statement(raw.trim(), i + 1, &mut seen)?);
+            i += 1;
+        }
     }
     Ok(Config { repeat, items })
 }

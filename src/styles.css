@@ -282,6 +282,37 @@ input.invalid,
   white-space: nowrap;
 }
 
+.line-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.charset-presets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  background: #f6f8fa;
+  border: 1px dashed #c9ccd1;
+  border-radius: 5px;
+  padding: 3px 7px;
+}
+
+.preset-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: #57606a;
+  white-space: nowrap;
+}
+
+.charset-input {
+  width: 140px;
+}
+
 .weight-group {
   display: inline-flex;
   align-items: center;

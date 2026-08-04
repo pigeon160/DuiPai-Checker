@@ -8,18 +8,22 @@ export interface DslError {
 
 export type ElemType = "Int" | "Float";
 
-/** 多赋值中的单个项（一行多个数，每项 name = expr）。 */
-export interface MultiPart {
+/** 行内项类型（只能输出单个值）。 */
+export type LineItemKind =
+  | { Int: { min: string; max: string } }
+  | { Float: { min: string; max: string; prec: string } }
+  | { Scalar: { expr: string } }
+  | { Text: { text: string } }
+  | { Str: { len: string; charset: string } };
+
+/** 行内项。 */
+export interface LineItem {
   name: string;
-  /** 标量表达式原文 */
-  expr: string;
+  kind: LineItemKind;
 }
 
 export type VarKind =
-  | { Int: { min: string; max: string } }
-  | { Multi: { rows: string; parts: MultiPart[] } }
-  | { Scalar: { expr: string } }
-  | { Float: { min: string; max: string; prec: string } }
+  | { Line: { rows: string; items: LineItem[] } }
   | {
       Array: {
         elem_type: ElemType;
@@ -31,7 +35,6 @@ export type VarKind =
       };
     }
   | { Perm: { n: string } }
-  | { String: { rows: string; cols: string; charset: string } }
   | { Binseq: { n: string; k: string } }
   | { Intervals: { n: string; lo: string; hi: string } }
   | {

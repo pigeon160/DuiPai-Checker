@@ -3,28 +3,19 @@
 export const DSL_LANGUAGE = "duipai-dsl";
 
 const COMMANDS = [
-  "int",
-  "float",
-  "ints",
-  "floats",
-  "matrix",
-  "matf",
-  "perm",
-  "tree",
-  "graph",
-  "str",
-  "strs",
-  "binseq",
-  "intervals",
-  "points",
-  "ring",
-  "base_ring",
+  "行", "整数", "浮点", "文本", "表达式", "字符串",
+  "ints", "floats", "matrix", "matf", "perm", "tree", "graph",
+  "binseq", "intervals", "points", "ring", "base_ring",
 ];
 
 /** 命令补全模板（insertText 用 tabstop 语法）。 */
 const SNIPPETS: Record<string, { body: string; doc: string }> = {
-  int: { body: "int(${1:min}, ${2:max})", doc: "整数变量，随机 [min,max]" },
-  float: { body: "float(${1:lo}, ${2:hi}, ${3:prec})", doc: "浮点变量" },
+  行: { body: "行:\n    ${1:整数} ${2:n}: ${3:1}, ${4:100}", doc: "行块：一行多个数（可重复）" },
+  整数: { body: "整数 ${1:n}: ${2:1}, ${3:100}", doc: "行内整数项" },
+  浮点: { body: "浮点 ${1:x}: ${2:0}, ${3:1}, ${4:prec}", doc: "行内浮点项" },
+  文本: { body: "文本 ${1:s}: \"${2:---}\"", doc: "行内固定文本" },
+  表达式: { body: "表达式 ${1:e}: ${2:2 * n}", doc: "行内自由表达式" },
+  字符串: { body: "字符串 ${1:s}: ${2:10}, \"${3:ab}\"", doc: "行内字符串（长度可随机）" },
   ints: { body: "ints(${1:count}, ${2:min}, ${3:max})", doc: "数组：一行 count 个整数" },
   floats: { body: "floats(${1:count}, ${2:lo}, ${3:hi}, ${4:prec})", doc: "数组：一行 count 个浮点" },
   matrix: { body: "matrix(${1:rows}, ${2:cols}, ${3:min}, ${4:max})", doc: "矩阵：rows × cols 整数" },
@@ -35,8 +26,6 @@ const SNIPPETS: Record<string, { body: string; doc: string }> = {
     body: "graph(${1:n}, ${2:m}, ${3:directed}, ${4:connected}, w=int(${5:1}, ${6:100}))",
     doc: "图，type=\"dag\"/\"bipartite\" 可指定结构",
   },
-  str: { body: "str(${1:len}, \"${2:abc}\")", doc: "字符串" },
-  strs: { body: "strs(${1:rows}, ${2:len}, \"${3:abc}\")", doc: "多行字符串" },
   binseq: { body: "binseq(${1:n}, ${2:k})", doc: "0/1 序列：n 位中 k 个 1" },
   intervals: { body: "intervals(${1:n}, ${2:lo}, ${3:hi})", doc: "区间，n 行 l r" },
   points: { body: "points(${1:n}, ${2:xlo}, ${3:xhi}, ${4:ylo}, ${5:yhi})", doc: "点集，n 行 x y" },

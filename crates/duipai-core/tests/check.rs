@@ -28,7 +28,7 @@ fn specs(sol: &str, brute: &str) -> (ProgramSpec, ProgramSpec) {
 }
 
 fn params(sol: &str, brute: &str, total: i64) -> CheckParams {
-    let cfg = parse("n = int(1, 5)\na = ints(n, 1, 9)\n").unwrap();
+    let cfg = parse("行:\n    整数 n: 1, 5\na = ints(n, 1, 9)\n").unwrap();
     let (sol, brute) = specs(sol, brute);
     CheckParams {
         sol,
@@ -167,7 +167,7 @@ fn check_cancel_stops() {
 fn check_compilation_error_reported() {
     // C++ 源码模式：源码不存在 -> 编译失败 -> 立即结束
     let (_, brute) = specs(ECHO, ECHO);
-    let cfg = parse("n = int(1, 5)\n").unwrap();
+    let cfg = parse("行:\n    整数 n: 1, 5\n").unwrap();
     let p = CheckParams {
         sol: ProgramSpec {
             mode: ProgMode::CppSource,

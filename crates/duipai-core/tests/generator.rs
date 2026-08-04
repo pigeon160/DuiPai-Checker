@@ -15,8 +15,9 @@ fn format_float_matches_legacy() {
 #[test]
 fn seed_reproducible() {
     let text = "\
-n = int(1, 100)
-x = float(0, 1, 4)
+行:
+    整数 n: 1, 100
+    浮点 x: 0, 1, 4
 a = ints(n, 1, 100)
 p = perm(n)
 t = tree(n, w=int(1, 10))
@@ -35,7 +36,7 @@ br = base_ring(n, 3)
 
 #[test]
 fn multi_test_shape() {
-    let cfg = parse("# 多测模式：重复 3 次\nn = int(5, 9)\na = ints(n, 1, 9)\n").unwrap();
+    let cfg = parse("# 多测模式：重复 3 次\n行:\n    整数 n: 5, 9\na = ints(n, 1, 9)\n").unwrap();
     let lines = generate(&cfg, Some(1)).unwrap();
     assert_eq!(lines[0], "3", "首行输出组数");
     // 每组：1 行 n + 1 行数组
@@ -44,9 +45,9 @@ fn multi_test_shape() {
 
 #[test]
 fn int_var_output() {
-    let cfg = parse("n = int(5, 5)\nm = int(n, n)\n").unwrap();
+    let cfg = parse("行:\n    整数 n: 5, 5\n    整数 m: n, n\n").unwrap();
     let lines = generate(&cfg, Some(0)).unwrap();
-    assert_eq!(lines, vec!["5", "5"]);
+    assert_eq!(lines, vec!["5 5"]);
 }
 
 #[test]
@@ -129,7 +130,7 @@ fn binseq_intervals_points() {
 
 #[test]
 fn string_and_float_array() {
-    let cfg = parse("s = str(5, \"01\")\nf = floats(3, 0, 1, 2)\n").unwrap();
+    let cfg = parse("行:\n    字符串 s: 5, \"01\"\nf = floats(3, 0, 1, 2)\n").unwrap();
     let lines = generate(&cfg, Some(0)).unwrap();
     assert_eq!(lines[0].len(), 5);
     assert!(lines[0].chars().all(|c| c == '0' || c == '1'));
@@ -142,10 +143,10 @@ fn string_and_float_array() {
 #[test]
 fn dynamic_range_error() {
     // 引用导致的范围错误（静态无法判定，生成期报错），带变量行号
-    let cfg = parse("n = int(1, 2)\na = ints(1, n+1, n)\n").unwrap();
+    let cfg = parse("行:\n    整数 n: 1, 2\na = ints(1, n+1, n)\n").unwrap();
     let e = generate(&cfg, Some(0)).expect_err("should fail");
     assert!(e.message.contains("数组元素范围"), "{e}");
-    assert_eq!(e.line, Some(2));
+    assert_eq!(e.line, Some(3));
 }
 
 #[test]
@@ -157,7 +158,7 @@ fn empty_config() {
 
 #[test]
 fn repeat_bad_count() {
-    let cfg = parse("# 多测模式：重复 0 次\nn = int(1, 2)\n").unwrap();
+    let cfg = parse("# 多测模式：重复 0 次\n行:\n    整数 n: 1, 2\n").unwrap();
     let e = generate(&cfg, Some(0)).expect_err("should fail");
     assert!(e.message.contains(">= 1"), "{e}");
 }

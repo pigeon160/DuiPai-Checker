@@ -1,28 +1,21 @@
 //! 静态校验（不依赖随机生成）：变量定义顺序、引用规则、类型匹配、常量值域非空。
 //!
-//! 与 legacy 生成期检查对齐：只做**常量可判定**的部分；含变量引用的范围
-//! 在生成期（Phase 3）动态检查。错误消息沿用 legacy 文案。
+//! 只做**常量可判定**的部分；含变量引用的范围在生成期动态检查。
 
 use std::collections::HashMap;
 
-use crate::ast::{Config, ElemType, GraphType, VarKind, Weight};
+use crate::ast::{Config, ElemType, GraphType, LineItemKind, VarKind, Weight};
 use crate::error::DslError;
 use crate::expr::{collect_names, eval_node, parse_expr, ExprNode};
 use crate::serializer::is_single_row;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-/// 可被引用的变量类型（引用其“规模值”；legacy 生成期仅这些类型写入环境）。
+/// 可被引用的变量类型（引用其“规模值”）。
 fn is_refable(kind: &VarKind) -> bool {
     matches!(
         kind,
-        VarKind::Int { .. }
-            | VarKind::Float { .. }
-            | VarKind::Multi { .. }
-            | VarKind::Scalar { .. }
-            | VarKind::Perm { .. }
-            | VarKind::Tree { .. }
-            | VarKind::Graph { .. }
+        VarKind::Line { .. } | VarKind::Perm { .. } | VarKind::Tree { .. } | VarKind::Graph { .. }
     )
 }
 
@@ -63,7 +56,31 @@ fn collect_plain_names(node: &ExprNode, out: &mut Vec<String>) {
     }
 }
 
-/// 检查数组索引引用：层数匹配（单行 1 层 / 矩阵 2 层）、常量越界提前报错。
+/// AST 节点转表达式文本（常量求值用）。
+fn expr_text_of(node: &ExprNode) -> String {
+    match node {
+        ExprNode::Num(v) => v.to_string(),
+        ExprNode::Name(n) => n.clone(),
+        ExprNode::Neg(x) => format!("-{}", expr_text_of(x)),
+        ExprNode::Bin { op, l, r } => format!(
+            "({} {} {})",
+            expr_text_of(l),
+            match op {
+                crate::expr::BinOp::Add => "+",
+                crate::expr::BinOp::Sub => "-",
+                crate::expr::BinOp::Mul => "*",
+                crate::expr::BinOp::Div => "/",
+                crate::expr::BinOp::FloorDiv => "//",
+                crate::expr::BinOp::Mod => "%",
+                crate::expr::BinOp::Pow => "**",
+            },
+            expr_text_of(r)
+        ),
+        _ => String::new(),
+    }
+}
+
+/// 检查数组索引引用：层数匹配（单行 1 层 / 矩阵 2 层 / 重复行变量 1 层）、常量越界。
 fn check_indexes(
     node: &ExprNode,
     types: &HashMap<String, VarKind>,
@@ -104,7 +121,7 @@ fn check_indexes(
                     }
                 }
                 // 重复行变量数组化：1 层索引，维度 = 行数
-                Some(VarKind::Multi { rows, .. }) if !is_single_row(rows) => {
+                Some(VarKind::Line { rows, .. }) if !is_single_row(rows) => {
                     if indices.len() != 1 {
                         errors.push(DslError::at(
                             line,
@@ -128,10 +145,7 @@ fn check_indexes(
                     errors.push(DslError::at(line, format!("变量 {name} 不是数组，不能索引引用")));
                 }
                 None => {
-                    errors.push(DslError::at(
-                        line,
-                        format!("引用了未定义的变量：{name}"),
-                    ));
+                    errors.push(DslError::at(line, format!("引用了未定义的变量：{name}")));
                 }
             }
             for i in indices {
@@ -149,30 +163,6 @@ fn check_indexes(
             }
         }
         _ => {}
-    }
-}
-
-/// AST 节点转表达式文本（常量求值用）。
-fn expr_text_of(node: &ExprNode) -> String {
-    match node {
-        ExprNode::Num(v) => v.to_string(),
-        ExprNode::Name(n) => n.clone(),
-        ExprNode::Neg(x) => format!("-{}", expr_text_of(x)),
-        ExprNode::Bin { op, l, r } => format!(
-            "({} {} {})",
-            expr_text_of(l),
-            match op {
-                crate::expr::BinOp::Add => "+",
-                crate::expr::BinOp::Sub => "-",
-                crate::expr::BinOp::Mul => "*",
-                crate::expr::BinOp::Div => "/",
-                crate::expr::BinOp::FloorDiv => "//",
-                crate::expr::BinOp::Mod => "%",
-                crate::expr::BinOp::Pow => "**",
-            },
-            expr_text_of(r)
-        ),
-        _ => String::new(),
     }
 }
 
@@ -195,7 +185,7 @@ fn check_field(expr: &str, label: &str, types: &HashMap<String, VarKind>, errors
             )),
             Some(kind) => {
                 // 重复行（rows 非 1）变量已数组化：普通引用须改用 n[k]
-                if let VarKind::Multi { rows, .. } = kind {
+                if let VarKind::Line { rows, .. } = kind {
                     if !is_single_row(rows) {
                         errors.push(DslError::at(
                             line,
@@ -258,6 +248,44 @@ fn check_weight(
     check_const(&w.prec, prec_label, "精度应在 0~15 之间", |v| (0.0..=15.0).contains(&v), errors, line);
 }
 
+/// 检查行内项（整数/浮点/文本/表达式/字符串）。
+fn check_line_item(
+    item: &crate::ast::LineItem,
+    types: &HashMap<String, VarKind>,
+    errors: &mut Vec<DslError>,
+    line: usize,
+) {
+    match &item.kind {
+        LineItemKind::Int { min, max } => {
+            check_field(min, "整数变量范围", types, errors, line);
+            check_field(max, "整数变量范围", types, errors, line);
+            check_lo_hi(min, max, "整数变量范围", "整数变量范围最小值不能大于最大值", errors, line);
+        }
+        LineItemKind::Float { min, max, prec } => {
+            check_field(min, "浮点数变量范围", types, errors, line);
+            check_field(max, "浮点数变量范围", types, errors, line);
+            check_field(prec, "浮点精度", types, errors, line);
+            check_lo_hi(min, max, "浮点数变量范围", "浮点数变量范围最小值不能大于最大值", errors, line);
+            check_const(prec, "浮点精度", "浮点数变量精度应在 0~15 之间", |v| (0.0..=15.0).contains(&v), errors, line);
+        }
+        LineItemKind::Scalar { expr } => {
+            check_field(expr, "", types, errors, line);
+        }
+        LineItemKind::Text { text } => {
+            if text.is_empty() {
+                errors.push(DslError::at(line, "文本内容不能为空"));
+            }
+        }
+        LineItemKind::Str { len, charset } => {
+            check_field(len, "字符串长度", types, errors, line);
+            if charset.is_empty() {
+                errors.push(DslError::at(line, "字符串字符集不能为空"));
+            }
+            check_const(len, "字符串长度", "字符串长度不能为负", |v| v >= 0.0, errors, line);
+        }
+    }
+}
+
 /// 校验一份配置，返回错误列表（每个错误带行号）。
 pub fn validate(config: &Config) -> Vec<DslError> {
     let mut errors: Vec<DslError> = Vec::new();
@@ -266,36 +294,24 @@ pub fn validate(config: &Config) -> Vec<DslError> {
         let line = item.line;
         let kind = &item.kind;
         match kind {
-            VarKind::Int { min, max } => {
-                check_field(min, "整数变量范围", &types, &mut errors, line);
-                check_field(max, "整数变量范围", &types, &mut errors, line);
-                check_lo_hi(min, max, "整数变量范围", "整数变量范围最小值不能大于最大值", &mut errors, line);
-            }
-            VarKind::Multi { rows, parts } => {
-                // 逐 part 检查并渐进登记名字：同一行内后者可引用前者（按当前行标量语义）
-                for p in parts {
-                    check_field(&p.expr, "", &types, &mut errors, line);
+            VarKind::Line { rows, items } => {
+                // 逐项检查并渐进登记名字：同一行内后者可引用前者（按当前行标量语义）
+                for it in items {
+                    check_line_item(it, &types, &mut errors, line);
                     types.insert(
-                        p.name.clone(),
-                        VarKind::Scalar { expr: String::new() },
+                        it.name.clone(),
+                        VarKind::Line {
+                            rows: "1".to_string(),
+                            items: Vec::new(),
+                        },
                     );
                 }
                 // 行结束后按真实语义登记（rows 非 1 时数组化，供后续语句引用检查）
-                for p in parts {
-                    types.insert(p.name.clone(), kind.clone());
+                for it in items {
+                    types.insert(it.name.clone(), kind.clone());
                 }
                 check_field(rows, "重复行数", &types, &mut errors, line);
                 check_const(rows, "重复行数", "重复行数不能小于 1", |v| v >= 1.0, &mut errors, line);
-            }
-            VarKind::Scalar { expr } => {
-                check_field(expr, "", &types, &mut errors, line);
-            }
-            VarKind::Float { min, max, prec } => {
-                check_field(min, "浮点数变量范围", &types, &mut errors, line);
-                check_field(max, "浮点数变量范围", &types, &mut errors, line);
-                check_field(prec, "浮点精度", &types, &mut errors, line);
-                check_lo_hi(min, max, "浮点数变量范围", "浮点数变量范围最小值不能大于最大值", &mut errors, line);
-                check_const(prec, "浮点精度", "浮点数变量精度应在 0~15 之间", |v| (0.0..=15.0).contains(&v), &mut errors, line);
             }
             VarKind::Array { elem_type, el_min, el_max, prec, rows, cols } => {
                 let is_float = *elem_type == ElemType::Float;
@@ -316,15 +332,6 @@ pub fn validate(config: &Config) -> Vec<DslError> {
             VarKind::Perm { n } => {
                 check_field(n, "排列长度", &types, &mut errors, line);
                 check_const(n, "排列长度", "排列长度 n 应 >= 1", |v| v >= 1.0, &mut errors, line);
-            }
-            VarKind::String { rows, cols, charset } => {
-                check_field(rows, "字符串行数", &types, &mut errors, line);
-                check_field(cols, "字符串长度", &types, &mut errors, line);
-                if charset.is_empty() {
-                    errors.push(DslError::at(line, "字符串字符集不能为空"));
-                }
-                check_const(rows, "字符串行数", "字符串行数不能小于 1", |v| v >= 1.0, &mut errors, line);
-                check_const(cols, "字符串长度", "字符串长度不能为负", |v| v >= 0.0, &mut errors, line);
             }
             VarKind::Binseq { n, k } => {
                 check_field(n, "0/1序列长度", &types, &mut errors, line);
@@ -446,9 +453,9 @@ pub fn validate(config: &Config) -> Vec<DslError> {
             }
         }
         match kind {
-            VarKind::Multi { parts, .. } => {
-                for p in parts {
-                    types.insert(p.name.clone(), kind.clone());
+            VarKind::Line { items, .. } => {
+                for it in items {
+                    types.insert(it.name.clone(), kind.clone());
                 }
             }
             _ => {

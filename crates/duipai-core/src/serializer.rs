@@ -1,8 +1,8 @@
-//! IR -> DSL 文本（移植 legacy/dsl.py 的 serialize）。
+//! IR -> DSL 文本（规范化）。
 //!
-//! 输出为规范化文本：每行一条语句，多测模式首行注释。
+//! 输出为规范化文本：行块 `行 (N):` + 缩进子项；命令每行一条；多测模式首行注释。
 
-use crate::ast::{Config, ElemType, GraphType, Item, VarKind, Weight};
+use crate::ast::{Config, ElemType, GraphType, Item, LineItemKind, VarKind, Weight};
 use crate::error::DslResult;
 use crate::expr::{parse_expr, ExprNode};
 
@@ -39,28 +39,45 @@ pub fn is_single_row(rows: &str) -> bool {
     }
 }
 
-/// 把一个配置项序列化为一行 DSL 语句。
-pub fn line_for(item: &Item) -> DslResult<String> {
+/// 行内项序列化为一行。
+fn line_item_line(item: &crate::ast::LineItem) -> String {
     let name = &item.name;
-    let line = match &item.kind {
-        VarKind::Int { min, max } => format!("{name} = int({min}, {max})"),
-        VarKind::Multi { rows, parts } => {
-            let mut assigns: Vec<String> = parts
-                .iter()
-                .map(|p| format!("{} = {}", p.name, p.expr))
-                .collect();
-            if rows != "1" {
-                assigns.push(format!("repeat({rows})"));
-            }
-            assigns.join(", ")
-        }
-        VarKind::Scalar { expr } => format!("{name} = {expr}"),
-        VarKind::Float { min, max, prec } => {
+    match &item.kind {
+        LineItemKind::Int { min, max } => format!("整数 {name}: {min}, {max}"),
+        LineItemKind::Float { min, max, prec } => {
             if prec == "6" {
-                format!("{name} = float({min}, {max})")
+                format!("浮点 {name}: {min}, {max}")
             } else {
-                format!("{name} = float({min}, {max}, {prec})")
+                format!("浮点 {name}: {min}, {max}, {prec}")
             }
+        }
+        LineItemKind::Scalar { expr } => format!("表达式 {name}: {expr}"),
+        LineItemKind::Text { text } => format!("文本 {name}: \"{text}\""),
+        LineItemKind::Str { len, charset } => {
+            if charset == "abcdefghijklmnopqrstuvwxyz" {
+                format!("字符串 {name}: {len}")
+            } else {
+                format!("字符串 {name}: {len}, \"{charset}\"")
+            }
+        }
+    }
+}
+
+/// 把一个配置项序列化为 DSL 行列表（行块为多行）。
+pub fn lines_for(item: &Item) -> DslResult<Vec<String>> {
+    let name = &item.name;
+    let lines: Vec<String> = match &item.kind {
+        VarKind::Line { rows, items } => {
+            let mut out = Vec::new();
+            if rows == "1" {
+                out.push("行:".to_string());
+            } else {
+                out.push(format!("行 ({rows}):"));
+            }
+            for it in items {
+                out.push(format!("    {}", line_item_line(it)));
+            }
+            out
         }
         VarKind::Array {
             elem_type,
@@ -78,38 +95,21 @@ pub fn line_for(item: &Item) -> DslResult<String> {
                 format!("{name} = {cmd_multi}({rows}, {cols}, {el_min}, {el_max}")
             };
             if elem_type.is_float() && prec != "6" {
-                format!("{base}, {prec})")
+                vec![format!("{base}, {prec})")]
             } else {
-                format!("{base})")
+                vec![format!("{base})")]
             }
         }
-        VarKind::Perm { n } => format!("{name} = perm({n})"),
-        VarKind::String {
-            rows,
-            cols,
-            charset,
-        } => {
-            if rows == "1" {
-                if charset.is_empty() || charset == "abcdefghijklmnopqrstuvwxyz" {
-                    format!("{name} = str({cols})")
-                } else {
-                    format!("{name} = str({cols}, \"{charset}\")")
-                }
-            } else if charset.is_empty() || charset == "abcdefghijklmnopqrstuvwxyz" {
-                format!("{name} = strs({rows}, {cols})")
-            } else {
-                format!("{name} = strs({rows}, {cols}, \"{charset}\")")
-            }
-        }
-        VarKind::Binseq { n, k } => format!("{name} = binseq({n}, {k})"),
-        VarKind::Intervals { n, lo, hi } => format!("{name} = intervals({n}, {lo}, {hi})"),
+        VarKind::Perm { n } => vec![format!("{name} = perm({n})")],
+        VarKind::Binseq { n, k } => vec![format!("{name} = binseq({n}, {k})")],
+        VarKind::Intervals { n, lo, hi } => vec![format!("{name} = intervals({n}, {lo}, {hi})")],
         VarKind::Points {
             n,
             xlo,
             xhi,
             ylo,
             yhi,
-        } => format!("{name} = points({n}, {xlo}, {xhi}, {ylo}, {yhi})"),
+        } => vec![format!("{name} = points({n}, {xlo}, {xhi}, {ylo}, {yhi})")],
         VarKind::Tree { n, w, val } => {
             let mut base = format!("{name} = tree({n}");
             if let Some(w) = w {
@@ -118,7 +118,7 @@ pub fn line_for(item: &Item) -> DslResult<String> {
             if let Some(val) = val {
                 base.push_str(&format!(", val={}", fmt_weight(val)));
             }
-            format!("{base})")
+            vec![format!("{base})")]
         }
         VarKind::Graph {
             gtype,
@@ -138,7 +138,7 @@ pub fn line_for(item: &Item) -> DslResult<String> {
                 if let Some(val) = val {
                     base.push_str(&format!(", val={}", fmt_weight(val)));
                 }
-                format!("{base})")
+                vec![format!("{base})")]
             }
             GraphType::BaseRing => {
                 let k = k.as_deref().unwrap_or("3");
@@ -149,7 +149,7 @@ pub fn line_for(item: &Item) -> DslResult<String> {
                 if let Some(val) = val {
                     base.push_str(&format!(", val={}", fmt_weight(val)));
                 }
-                format!("{base})")
+                vec![format!("{base})")]
             }
             _ => {
                 let d = if *directed { 1 } else { 0 };
@@ -169,14 +169,14 @@ pub fn line_for(item: &Item) -> DslResult<String> {
                 if let Some(val) = val {
                     base.push_str(&format!(", val={}", fmt_weight(val)));
                 }
-                format!("{base})")
+                vec![format!("{base})")]
             }
         },
     };
-    Ok(line)
+    Ok(lines)
 }
 
-/// 把配置序列化为 DSL 文本（每行一条语句）。
+/// 把配置序列化为 DSL 文本。
 pub fn serialize(config: &Config) -> DslResult<String> {
     let mut out: Vec<String> = Vec::new();
     if let Some(repeat) = &config.repeat {
@@ -185,7 +185,7 @@ pub fn serialize(config: &Config) -> DslResult<String> {
         }
     }
     for item in &config.items {
-        out.push(line_for(item)?);
+        out.extend(lines_for(item)?);
     }
     Ok(out.join("\n"))
 }

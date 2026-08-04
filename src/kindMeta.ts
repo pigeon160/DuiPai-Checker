@@ -1,9 +1,11 @@
 import type { Item, VarKind, Weight, ElemType } from "./api";
 
-/** DSL 保留字（命令 + repeat），不可用作变量名。 */
+/** DSL 保留字（命令 + 关键字），不可用作变量名。 */
 export const RESERVED_COMMANDS = new Set([
-  "int", "float", "ints", "floats", "matrix", "matf", "perm", "tree", "graph",
-  "str", "strs", "binseq", "intervals", "points", "ring", "base_ring", "repeat",
+  "ints", "floats", "matrix", "matf", "perm", "binseq", "intervals", "points",
+  "tree", "graph", "ring", "base_ring", "repeat",
+  "行", "整数", "浮点", "文本", "表达式", "字符串",
+  "int", "float", "str", "strs",
 ]);
 
 /** 变量名格式：字母/下划线开头，后跟字母数字下划线。 */
@@ -18,20 +20,15 @@ export function nameError(name: string, taken?: (n: string) => boolean): string 
   return null;
 }
 
-export type { VarKind };
-
-/** 类型中文名（顺序即“添加变量”下拉顺序）。 */
+/** 顶层类型（顺序即“添加变量”下拉顺序）。 */
 export const KIND_ORDER: { kind: VarKind; label: string }[] = [
-  { kind: { Int: { min: "1", max: "100" } }, label: "整数变量" },
-  { kind: { Float: { min: "0", max: "1", prec: "6" } }, label: "浮点变量" },
-  { kind: { Scalar: { expr: "int(1, 100)" } }, label: "表达式变量" },
   {
     kind: {
-      Multi: {
+      Line: {
         rows: "1",
-        parts: [
-          { name: "n", expr: "int(1, 100)" },
-          { name: "m", expr: "int(1, 100)" },
+        items: [
+          { name: "n", kind: { Int: { min: "1", max: "100" } } },
+          { name: "m", kind: { Int: { min: "1", max: "100" } } },
         ],
       },
     },
@@ -51,7 +48,6 @@ export const KIND_ORDER: { kind: VarKind; label: string }[] = [
     label: "数组 / 矩阵",
   },
   { kind: { Perm: { n: "10" } }, label: "排列" },
-  { kind: { String: { rows: "1", cols: "10", charset: "abcdefghijklmnopqrstuvwxyz" } }, label: "字符串" },
   { kind: { Binseq: { n: "10", k: "5" } }, label: "0/1 序列" },
   { kind: { Intervals: { n: "5", lo: "1", hi: "10" } }, label: "区间" },
   { kind: { Points: { n: "5", xlo: "0", xhi: "9", ylo: "0", yhi: "9" } }, label: "点集" },
@@ -67,13 +63,9 @@ export function kindLabel(kind: VarKind): string {
   const key = Object.keys(kind)[0];
   const k = kind as Record<string, unknown>;
   switch (key) {
-    case "Int": return "整数变量";
-    case "Float": return "浮点变量";
-    case "Multi": return "行";
-    case "Scalar": return "表达式变量";
+    case "Line": return "行";
     case "Array": return (k.Array as { elem_type: ElemType }).elem_type === "Int" ? "整数数组" : "浮点数组";
     case "Perm": return "排列";
-    case "String": return "字符串";
     case "Binseq": return "0/1 序列";
     case "Intervals": return "区间";
     case "Points": return "点集";
@@ -95,16 +87,18 @@ export function kindLabel(kind: VarKind): string {
 /** 简单文本字段定义。 */
 interface F { key: string; label: string; ph?: string }
 
-function textFields(kind: VarKind): F[] {
+export function kindFields(kind: VarKind): F[] {
   const k = kind as Record<string, unknown>;
   switch (Object.keys(kind)[0]) {
-    case "Int": {
-      const v = k.Int as { min: string; max: string };
-      return [{ key: "min", label: "最小", ph: v.min }, { key: "max", label: "最大", ph: v.max }];
-    }
-    case "Float": {
-      const v = k.Float as { min: string; max: string; prec: string };
-      return [{ key: "min", label: "最小", ph: v.min }, { key: "max", label: "最大", ph: v.max }, { key: "prec", label: "精度", ph: v.prec }];
+    case "Array": {
+      const v = k.Array as { rows: string; cols: string; el_min: string; el_max: string; prec: string };
+      return [
+        { key: "rows", label: "行数", ph: v.rows },
+        { key: "cols", label: "每行个数", ph: v.cols },
+        { key: "el_min", label: "元素最小", ph: v.el_min },
+        { key: "el_max", label: "元素最大", ph: v.el_max },
+        { key: "prec", label: "精度", ph: v.prec },
+      ];
     }
     case "Perm": {
       const v = k.Perm as { n: string };
@@ -128,45 +122,16 @@ function textFields(kind: VarKind): F[] {
         { key: "yhi", label: "y 上界", ph: v.yhi },
       ];
     }
-    default: return [];
-  }
-}
-
-export function kindFields(kind: VarKind): F[] {
-  const k = kind as Record<string, unknown>;
-  switch (Object.keys(kind)[0]) {
-    case "Array": {
-      const v = k.Array as { rows: string; cols: string; el_min: string; el_max: string; prec: string };
-      return [
-        { key: "rows", label: "行数", ph: v.rows },
-        { key: "cols", label: "每行个数", ph: v.cols },
-        { key: "el_min", label: "元素最小", ph: v.el_min },
-        { key: "el_max", label: "元素最大", ph: v.el_max },
-        { key: "prec", label: "精度", ph: v.prec },
-      ];
-    }
-    case "String": {
-      const v = k.String as { rows: string; cols: string; charset: string };
-      return [
-        { key: "rows", label: "行数", ph: v.rows },
-        { key: "cols", label: "长度", ph: v.cols },
-        { key: "charset", label: "字符集", ph: v.charset },
-      ];
-    }
     case "Tree": {
       const v = k.Tree as { n: string };
       return [{ key: "n", label: "顶点数", ph: v.n }];
-    }
-    case "Scalar": {
-      const v = k.Scalar as { expr: string };
-      return [{ key: "expr", label: "表达式", ph: v.expr }];
     }
     case "Graph": {
       const v = k.Graph as { n: string; m: string };
       return [{ key: "n", label: "顶点数", ph: v.n }, { key: "m", label: "边数", ph: v.m }];
     }
     default:
-      return textFields(kind);
+      return [];
   }
 }
 
@@ -205,7 +170,6 @@ export function setGtype(kind: VarKind, gtype: string): VarKind {
   return { Graph: inner } as unknown as VarKind;
 }
 
-/** 权值描述 → DSL 片段（与后端 Weight 结构一致）。 */
 export function setWeight(kind: VarKind, which: "w" | "val", w: Weight | null): VarKind {
   const k = kind as Record<string, unknown>;
   const entry = Object.entries(k)[0];
@@ -214,6 +178,40 @@ export function setWeight(kind: VarKind, which: "w" | "val", w: Weight | null): 
   return { [kname]: clone } as unknown as VarKind;
 }
 
-export function makeItem(name: string, kind: VarKind): Item {
-  return { name, kind, line: 0 };
+export function makeItem(kind: VarKind): Item {
+  return { name: "", kind, line: 0 };
+}
+
+/** 字符集快捷预设（字符串项用）。 */
+export const CHARSET_LOWER = "abcdefghijklmnopqrstuvwxyz";
+export const CHARSET_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+export const CHARSET_DIGITS = "0123456789";
+
+/** 预设组合拼接（固定顺序：小写+大写+数字）。 */
+export function presetsToCharset(checks: { lower: boolean; upper: boolean; digits: boolean }): string {
+  let s = "";
+  if (checks.lower) s += CHARSET_LOWER;
+  if (checks.upper) s += CHARSET_UPPER;
+  if (checks.digits) s += CHARSET_DIGITS;
+  return s;
+}
+
+/** 从 charset 反推预设勾选；无法完全匹配时返回 null（走自定义）。 */
+export function charsetToPresets(
+  charset: string,
+): { lower: boolean; upper: boolean; digits: boolean } | null {
+  const combos: [string, { lower: boolean; upper: boolean; digits: boolean }][] = [
+    [CHARSET_LOWER + CHARSET_UPPER + CHARSET_DIGITS, { lower: true, upper: true, digits: true }],
+    [CHARSET_LOWER + CHARSET_UPPER, { lower: true, upper: true, digits: false }],
+    [CHARSET_LOWER + CHARSET_DIGITS, { lower: true, upper: false, digits: true }],
+    [CHARSET_UPPER + CHARSET_DIGITS, { lower: false, upper: true, digits: true }],
+    [CHARSET_LOWER, { lower: true, upper: false, digits: false }],
+    [CHARSET_UPPER, { lower: false, upper: true, digits: false }],
+    [CHARSET_DIGITS, { lower: false, upper: false, digits: true }],
+    ["", { lower: false, upper: false, digits: false }],
+  ];
+  for (const [s, c] of combos) {
+    if (charset === s) return c;
+  }
+  return null;
 }

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{Config, ElemType, GraphType, VarKind, Weight};
+use crate::ast::{Config, ElemType, GraphType, LineItemKind, VarKind, Weight};
 use crate::error::{DslError, DslResult};
 use crate::expr::{eval_expr, EnvValue};
 use rand::rngs::StdRng;
@@ -225,61 +225,27 @@ fn gen_items(ctx: &mut GenCtx, items: &[crate::ast::Item], lines: &mut Vec<Strin
     Ok(())
 }
 
-fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -> DslResult<()> {
-    let name = &item.name;
-    match &item.kind {
-        VarKind::Int { min, max } => {
+/// 行内项是否为数值类型（可引用/数组化）。
+fn is_numeric_item(it: &crate::ast::LineItem) -> bool {
+    matches!(
+        it.kind,
+        LineItemKind::Int { .. } | LineItemKind::Float { .. } | LineItemKind::Scalar { .. }
+    )
+}
+
+/// 生成行内项，返回 (输出文本, 数值或 None)。
+fn gen_line_item(ctx: &mut GenCtx, it: &crate::ast::LineItem) -> DslResult<(String, Option<f64>)> {
+    match &it.kind {
+        LineItemKind::Int { min, max } => {
             let lo = ctx.ev(min, "整数变量范围")? as i64;
             let hi = ctx.ev(max, "整数变量范围")? as i64;
             if lo > hi {
                 return Err(DslError::bare("整数变量范围最小值不能大于最大值"));
             }
             let value = ctx.int(lo, hi);
-            lines.push(value.to_string());
-            ctx.env.insert(name.clone(), EnvValue::Scalar(value as f64));
+            Ok((value.to_string(), Some(value as f64)))
         }
-        VarKind::Multi { rows, parts } => {
-            let rows_n = ctx.ev(rows, "重复行数")? as i64;
-            if rows_n < 1 {
-                return Err(DslError::bare("重复行数不能小于 1"));
-            }
-            // rows 静态非 1：行变量数组化（引用须 n[k]）
-            if crate::serializer::is_single_row(rows) {
-                for _ in 0..rows_n {
-                    let mut row = Vec::with_capacity(parts.len());
-                    for p in parts {
-                        let value = ctx.ev(&p.expr, "表达式")?;
-                        row.push(format_float(value, 12));
-                        ctx.env.insert(p.name.clone(), EnvValue::Scalar(value));
-                    }
-                    lines.push(row.join(" "));
-                }
-            } else {
-                let mut values: Vec<Vec<f64>> =
-                    vec![Vec::with_capacity(rows_n as usize); parts.len()];
-                for _ in 0..rows_n {
-                    let mut row = Vec::with_capacity(parts.len());
-                    for (i, p) in parts.iter().enumerate() {
-                        let value = ctx.ev(&p.expr, "表达式")?;
-                        row.push(format_float(value, 12));
-                        values[i].push(value);
-                        // 同行引用：先按标量登记（当前行值）
-                        ctx.env.insert(p.name.clone(), EnvValue::Scalar(value));
-                    }
-                    lines.push(row.join(" "));
-                }
-                // 行结束后数组化（引用须 n[k]）
-                for (i, p) in parts.iter().enumerate() {
-                    ctx.env.insert(p.name.clone(), EnvValue::Grid(vec![values[i].clone()]));
-                }
-            }
-        }
-        VarKind::Scalar { expr } => {
-            let value = ctx.ev(expr, "表达式")?;
-            lines.push(format_float(value, 12));
-            ctx.env.insert(name.clone(), EnvValue::Scalar(value));
-        }
-        VarKind::Float { min, max, prec } => {
+        LineItemKind::Float { min, max, prec } => {
             let lo = ctx.ev(min, "浮点数变量范围")?;
             let hi = ctx.ev(max, "浮点数变量范围")?;
             if lo > hi {
@@ -290,8 +256,73 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                 return Err(DslError::bare("浮点数变量精度应在 0~15 之间"));
             }
             let value = ctx.uniform(lo, hi);
-            lines.push(format_float(value, prec));
-            ctx.env.insert(name.clone(), EnvValue::Scalar(value));
+            Ok((format_float(value, prec), Some(value)))
+        }
+        LineItemKind::Scalar { expr } => {
+            let value = ctx.ev(expr, "表达式")?;
+            Ok((format_float(value, 12), Some(value)))
+        }
+        LineItemKind::Text { text } => Ok((text.clone(), None)),
+        LineItemKind::Str { len, charset } => {
+            let len = ctx.ev(len, "字符串长度")? as i64;
+            if len < 0 {
+                return Err(DslError::bare("字符串长度不能为负"));
+            }
+            if charset.is_empty() {
+                return Err(DslError::bare("字符串字符集不能为空"));
+            }
+            let chars: Vec<char> = charset.chars().collect();
+            let s: String = (0..len).map(|_| *chars.choose(ctx.rng).unwrap()).collect();
+            Ok((s, None))
+        }
+    }
+}
+
+fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -> DslResult<()> {
+    let name = &item.name;
+    match &item.kind {
+        VarKind::Line { rows, items } => {
+            let rows_n = ctx.ev(rows, "重复行数")? as i64;
+            if rows_n < 1 {
+                return Err(DslError::bare("重复行数不能小于 1"));
+            }
+            // 单行：行内项是标量，可普通引用；重复：数值项数组化（引用须 n[k]）
+            if crate::serializer::is_single_row(rows) {
+                for _ in 0..rows_n {
+                    let mut row = Vec::with_capacity(items.len());
+                    for it in items {
+                        let (text, value) = gen_line_item(ctx, it)?;
+                        if let Some(v) = value {
+                            ctx.env.insert(it.name.clone(), EnvValue::Scalar(v));
+                        }
+                        row.push(text);
+                    }
+                    lines.push(row.join(" "));
+                }
+            } else {
+                // 数值项（整数/浮点/表达式）收集每行值 -> Grid(1×N)
+                let mut values: Vec<Vec<f64>> =
+                    vec![Vec::with_capacity(rows_n as usize); items.len()];
+                for _ in 0..rows_n {
+                    let mut row = Vec::with_capacity(items.len());
+                    for (i, it) in items.iter().enumerate() {
+                        let (text, value) = gen_line_item(ctx, it)?;
+                        if let Some(v) = value {
+                            values[i].push(v);
+                            // 同行引用：先按标量登记（当前行值）
+                            ctx.env.insert(it.name.clone(), EnvValue::Scalar(v));
+                        }
+                        row.push(text);
+                    }
+                    lines.push(row.join(" "));
+                }
+                // 行结束后数组化（引用须 n[k]）
+                for (i, it) in items.iter().enumerate() {
+                    if is_numeric_item(it) {
+                        ctx.env.insert(it.name.clone(), EnvValue::Grid(vec![values[i].clone()]));
+                    }
+                }
+            }
         }
         VarKind::Array { elem_type, el_min, el_max, prec, rows, cols } => {
             let rows_n = ctx.ev(rows, "数组行数")? as i64;
@@ -336,24 +367,6 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                     lines.push(row.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
                 }
                 ctx.env.insert(name.clone(), EnvValue::Grid(grid));
-            }
-        }
-        VarKind::String { rows, cols, charset } => {
-            if charset.is_empty() {
-                return Err(DslError::bare("字符串字符集不能为空"));
-            }
-            let rows_n = ctx.ev(rows, "字符串行数")? as i64;
-            let len = ctx.ev(cols, "字符串长度")? as i64;
-            if rows_n < 1 {
-                return Err(DslError::bare("字符串行数不能小于 1"));
-            }
-            if len < 0 {
-                return Err(DslError::bare("字符串长度不能为负"));
-            }
-            let chars: Vec<char> = charset.chars().collect();
-            for _ in 0..rows_n {
-                let s: String = (0..len).map(|_| *chars.choose(ctx.rng).unwrap()).collect();
-                lines.push(s);
             }
         }
         VarKind::Binseq { n, k } => {

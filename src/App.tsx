@@ -30,10 +30,12 @@ function loadJson<T>(key: string, fallback: T): T {
 }
 
 const SAMPLE_DSL = `# 多测模式：重复 3 次
-n = int(1, 100)
+行:
+    整数 n: 1, 100
+    浮点 x: 0, 1, 4
+    表达式 e: 2 * n
 a = ints(n, 1, 100)
 p = perm(n)
-s = str(10, "ab")
 t = tree(n, w=int(1, 100))
 g = graph(n, 50, 1, 0, w=int(1, 9))
 `;
@@ -59,8 +61,6 @@ export default function App() {
   itemsRef.current = items;
   const dslRef = useRef(dsl);
   dslRef.current = dsl;
-  // 当前 DSL 是否有错（有错时 GUI→DSL 同步跳过，保留错误文本供修改）
-  const dslHasErrorsRef = useRef(false);
 
   // 面板折叠 / 拖拽高度（localStorage 持久化）
   const [collapsed, setCollapsed] = useState<boolean[]>(() =>
@@ -123,9 +123,9 @@ export default function App() {
       .finally(() => setReady(true));
   }, []);
 
-  // 图形化 -> DSL（防抖 300ms；编辑器聚焦或 DSL 有错时不覆盖）
+  // 图形化 -> DSL（防抖 200ms；编辑器聚焦时不覆盖——用户正在写 DSL）
   useEffect(() => {
-    if (!ready || editorFocused || dslHasErrorsRef.current) return;
+    if (!ready || editorFocused) return;
     const t = setTimeout(async () => {
       try {
         const cfg: Config = {
@@ -137,7 +137,7 @@ export default function App() {
       } catch {
         // 序列化失败（理论上不发生），保留当前文本
       }
-    }, 300);
+    }, 200);
     return () => clearTimeout(t);
   }, [items, repeatEnabled, repeatCount, editorFocused, ready]);
 
@@ -147,10 +147,8 @@ export default function App() {
       try {
         const r = await dslParseChecked(dsl);
         setErrors(r.errors);
-        dslHasErrorsRef.current = r.errors.length > 0;
       } catch (e) {
         setErrors([e as DslError]);
-        dslHasErrorsRef.current = true;
       }
     }, 400);
     return () => clearTimeout(t);

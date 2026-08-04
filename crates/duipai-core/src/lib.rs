@@ -12,7 +12,9 @@ pub mod runner;
 pub mod serializer;
 pub mod validate;
 
-pub use ast::{Config, ElemType, GraphType, Item, MultiPart, RepeatMode, VarKind, Weight};
+pub use ast::{
+    Config, ElemType, GraphType, Item, LineItem, LineItemKind, RepeatMode, VarKind, Weight,
+};
 pub use check::{
     finish_summary, run_check, CheckEvent, CheckParams, CheckStats, GenMode, ProgMode,
     ProgramSpec,
@@ -20,7 +22,7 @@ pub use check::{
 pub use error::{DslError, DslResult};
 pub use expr::{collect_names, eval_expr, parse_expr, tokenize, EnvValue, ExprNode, Tok};
 pub use generator::{format_float, generate};
-pub use parser::{parse, KNOWN_COMMANDS};
+pub use parser::{parse, KNOWN_COMMANDS, LINE_ITEM_KINDS, RETIRED_COMMANDS, TOP_COMMANDS};
 pub use runner::{
     compare, compile_cpp, normalize, parse_command, run_argv, run_argv_ex, run_program,
     run_program_ex, RunResult, RunStatus,
