@@ -289,6 +289,24 @@ input.invalid,
   flex-wrap: wrap;
 }
 
+/* 行内项独占一行并缩进 */
+.line-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: 34px;
+  margin-top: 4px;
+  width: 100%;
+}
+
+.line-items .multi-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
 .charset-presets {
   display: inline-flex;
   align-items: center;

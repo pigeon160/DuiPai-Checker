@@ -46,6 +46,17 @@ impl ElemType {
     }
 }
 
+/// 树结构类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TreeType {
+    /// 随机树（默认）
+    Random,
+    /// 菊花图（star）：中心连所有点
+    Star,
+    /// 链（chain）：随机排列顶点连成链
+    Chain,
+}
+
 /// 图结构类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphType {
@@ -121,23 +132,26 @@ pub enum VarKind {
         ylo: String,
         yhi: String,
     },
-    /// 树：`t = tree(n[, w=...][, val=...])`
+    /// 树：`t = tree(n[, type=...][, w=...])`（type: star 菊花图 / chain 链）
     Tree {
         n: String,
+        ttype: TreeType,
         w: Option<Weight>,
-        val: Option<Weight>,
     },
-    /// 图：`g = graph(n, m, directed, connected[, type=...][, w=...][, val=...])`
+    /// 图：`g = graph(n, m, directed, connected[, multi=1][, loop=1][, type=...][, w=...])`
     Graph {
         gtype: GraphType,
         n: String,
         m: String,
         directed: bool,
         connected: bool,
+        /// 允许重边（multi=1，m 无上限）
+        multi: bool,
+        /// 允许自环（loop=1，u 可等于 v）
+        loop_: bool,
         /// base_ring 的环大小 k
         k: Option<String>,
         w: Option<Weight>,
-        val: Option<Weight>,
     },
 }
 

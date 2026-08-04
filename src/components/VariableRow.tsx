@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import type { Item, LineItem, LineItemKind, VarKind, Weight, ElemType } from "../api";
 import { exprEval } from "../api";
 import {
-  charsetToPresets,
+  CHARSET_DIGITS,
+  CHARSET_LOWER,
+  CHARSET_UPPER,
   editField,
   kindFieldValue,
   kindFields,
@@ -273,7 +275,7 @@ function LineItemEditor({
   );
 }
 
-/** 字符串项：长度 + 字符集快捷预设（多选）。 */
+/** 字符串项：长度 + 字符集快捷预设（预设与自定义可组合，生成时去重）。 */
 function StrEditor({
   len,
   charset,
@@ -283,9 +285,9 @@ function StrEditor({
   charset: string;
   onChange: (len: string, charset: string) => void;
 }) {
-  const presets = charsetToPresets(charset);
-  const [custom, setCustom] = useState(presets ? "" : charset);
-  const [usingCustom, setUsingCustom] = useState(!presets);
+  // 从 charset 中按序剥离预设段，剩余为自定义字符
+  const [presets, custom] = splitPresets(charset);
+  const presetOn = presets;
   return (
     <>
       <input
@@ -296,7 +298,7 @@ function StrEditor({
         title="长度（可为表达式，如 int(3, 5) 区间随机）"
         spellCheck={false}
       />
-      <span className="charset-presets" title="字符集快捷预设（可多选）">
+      <span className="charset-presets" title="字符集快捷预设（多选，可与自定义组合，生成时去重）">
         {(
           [
             ["lower", "全小写"],
@@ -307,54 +309,45 @@ function StrEditor({
           <label key={k0} className="preset-label">
             <input
               type="checkbox"
-              checked={usingCustom ? false : (presets?.[k0] ?? false)}
-              disabled={usingCustom}
+              checked={presetOn[k0]}
               onChange={(e) => {
-                const cur = presets ?? { lower: false, upper: false, digits: false };
-                const next = { ...cur, [k0]: e.target.checked };
-                if (!next.lower && !next.upper && !next.digits) {
-                  onChange(len, "abcdefghijklmnopqrstuvwxyz");
-                  return;
-                }
-                onChange(len, presetsToCharset(next));
+                const next = { ...presetOn, [k0]: e.target.checked };
+                onChange(len, presetsToCharset(next) + custom);
               }}
             />
             {label}
           </label>
         ))}
-        <label className="preset-label">
-          <input
-            type="checkbox"
-            checked={usingCustom}
-            onChange={(e) => {
-              setUsingCustom(e.target.checked);
-              if (e.target.checked) {
-                setCustom(charset);
-              } else {
-                onChange(len, "abcdefghijklmnopqrstuvwxyz");
-              }
-            }}
-          />
-          自定义
-        </label>
-        {usingCustom && (
-          <input
-            className="field-input charset-input"
-            value={custom}
-            onChange={(e) => {
-              setCustom(e.target.value);
-              onChange(len, e.target.value);
-            }}
-            placeholder="自定义字符集"
-            spellCheck={false}
-          />
-        )}
+        <span className="wg-label">自定义</span>
+        <input
+          className="field-input charset-input"
+          value={custom}
+          onChange={(e) => onChange(len, presetsToCharset(presetOn) + e.target.value)}
+          placeholder="额外字符"
+          title="自定义字符（与预设组合，可重复，生成时去重）"
+          spellCheck={false}
+        />
       </span>
     </>
   );
 }
 
-/** 行块表单：行级重复 + 行内项列表。 */
+/** 从 charset 中按序剥离 LOWER/UPPER/DIGITS 预设段，返回 (预设勾选, 自定义剩余)。 */
+function splitPresets(charset: string): [
+  { lower: boolean; upper: boolean; digits: boolean },
+  string,
+] {
+  let rest = charset;
+  const lower = rest.startsWith(CHARSET_LOWER);
+  if (lower) rest = rest.slice(CHARSET_LOWER.length);
+  const upper = rest.startsWith(CHARSET_UPPER);
+  if (upper) rest = rest.slice(CHARSET_UPPER.length);
+  const digits = rest.startsWith(CHARSET_DIGITS);
+  if (digits) rest = rest.slice(CHARSET_DIGITS.length);
+  return [{ lower, upper, digits }, rest];
+}
+
+/** 行块表单：标题行（重复控件 + ＋数）+ 行内项各占一行缩进。 */
 function LineForm({
   kind,
   onKind,
@@ -395,6 +388,14 @@ function LineForm({
     };
   }, [rows]);
 
+  // 自动命名：新行内项取名 v1/v2/...（避开已有名）
+  const used = new Set(items.map((it) => it.name).filter(Boolean));
+  const nextName = () => {
+    let i = 1;
+    while (used.has(`v${i}`)) i += 1;
+    return `v${i}`;
+  };
+
   return (
     <span className="line-form">
       <span className={`multi-part${rowsError ? " invalid" : ""}`}>
@@ -420,27 +421,29 @@ function LineForm({
             {rowsError && <span className="inline-err">{rowsError}</span>}
           </>
         )}
+        {repeatOn && <span className="repeat-hint">重复行变量名按 n[k] 数组形式引用</span>}
+        <button
+          onClick={() =>
+            setItems([
+              ...items,
+              { name: nextName(), kind: { Int: { min: "1", max: "100" } } },
+            ])
+          }
+        >
+          ＋ 数
+        </button>
       </span>
-      {repeatOn && <span className="repeat-hint">重复行变量名按 n[k] 数组形式引用</span>}
-      {items.map((it, i) => (
-        <LineItemEditor
-          key={i}
-          item={it}
-          nameTaken={nameTaken}
-          onChange={(nit) => setItems(items.map((q, j) => (j === i ? nit : q)))}
-          onRemove={() => setItems(items.filter((_, j) => j !== i))}
-        />
-      ))}
-      <button
-        onClick={() =>
-          setItems([
-            ...items,
-            { name: "", kind: { Int: { min: "1", max: "100" } } },
-          ])
-        }
-      >
-        ＋ 数
-      </button>
+      <span className="line-items">
+        {items.map((it, i) => (
+          <LineItemEditor
+            key={i}
+            item={it}
+            nameTaken={nameTaken}
+            onChange={(nit) => setItems(items.map((q, j) => (j === i ? nit : q)))}
+            onRemove={() => setItems(items.filter((_, j) => j !== i))}
+          />
+        ))}
+      </span>
     </span>
   );
 }
@@ -481,9 +484,10 @@ function KindForm({
       gtype: string;
       directed: boolean;
       connected: boolean;
+      multi: boolean;
+      loop_: boolean;
       k: string | null;
       w: Weight | null;
-      val: Weight | null;
     };
     return (
       <>
@@ -526,18 +530,51 @@ function KindForm({
             placeholder="k"
           />
         )}
+        {(v.gtype === "General" || v.gtype === "Dag" || v.gtype === "Bipartite") && (
+          <>
+            <label className="preset-label" title="允许重复边（边数无上限）">
+              <input
+                type="checkbox"
+                checked={v.multi}
+                onChange={(e) =>
+                  onKind({ Graph: { ...v, multi: e.target.checked } } as unknown as VarKind)
+                }
+              />
+              重边
+            </label>
+            {v.gtype === "General" && (
+              <label className="preset-label" title="允许自环（u 可等于 v）">
+                <input
+                  type="checkbox"
+                  checked={v.loop_}
+                  onChange={(e) =>
+                    onKind({ Graph: { ...v, loop_: e.target.checked } } as unknown as VarKind)
+                  }
+                />
+                自环
+              </label>
+            )}
+          </>
+        )}
         <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, "w", w))} />
-        <WeightGroup label="节点权" w={v.val} onChange={(w) => onKind(setWeight(kind, "val", w))} />
       </>
     );
   }
   if (key === "Tree") {
-    const v = k.Tree as { w: Weight | null; val: Weight | null };
+    const v = k.Tree as { ttype: string; w: Weight | null };
     return (
       <>
+        <select
+          value={v.ttype}
+          title="树结构"
+          onChange={(e) => onKind({ Tree: { ...v, ttype: e.target.value } } as unknown as VarKind)}
+        >
+          <option value="Random">随机树</option>
+          <option value="Star">菊花图</option>
+          <option value="Chain">链</option>
+        </select>
         <TextFields kind={kind} onKind={onKind} />
         <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, "w", w))} />
-        <WeightGroup label="节点权" w={v.val} onChange={(w) => onKind(setWeight(kind, "val", w))} />
       </>
     );
   }

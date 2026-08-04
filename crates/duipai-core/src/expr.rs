@@ -17,9 +17,6 @@ pub enum Tok {
     Comma,
 }
 
-/// 中文语法关键字（行块与行内项类型）。
-pub const CN_KEYWORDS: &[&str] = &["行", "整数", "浮点", "文本", "表达式", "字符串"];
-
 /// 把表达式切成 token 列表。无法识别的字符报错。
 pub fn tokenize(src: &str) -> DslResult<Vec<Tok>> {
     let mut toks = Vec::new();
@@ -123,24 +120,8 @@ pub fn tokenize(src: &str) -> DslResult<Vec<Tok>> {
                 i += 1;
             }
             other => {
-                // 非 ASCII：尝试匹配中文关键字（行/整数/浮点/文本/表达式/字符串）
-                if other >= 0x80 {
-                    let rest = &src[i..];
-                    if let Some(kw) = CN_KEYWORDS.iter().find(|k| rest.starts_with(**k)) {
-                        let after = &rest[kw.len()..];
-                        let boundary = after.chars().next().map_or(true, |c| {
-                            c.is_whitespace() || c == ':' || c == '(' || c == ','
-                        });
-                        if boundary {
-                            toks.push(Tok::Name(kw.to_string()));
-                            i += kw.len();
-                            continue;
-                        }
-                    }
-                    let ch = rest.chars().next().unwrap();
-                    return Err(DslError::bare(format!("无法识别的字符：{ch}")));
-                }
-                let ch = other as char;
+                // 非 ASCII 一律视为非法字符（DSL 为英文语法）
+                let ch = src[i..].chars().next().unwrap_or(other as char);
                 return Err(DslError::bare(format!("无法识别的字符：{ch}")));
             }
         }

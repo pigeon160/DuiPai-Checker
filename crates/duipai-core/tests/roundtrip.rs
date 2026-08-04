@@ -14,10 +14,10 @@ fn seeded() -> StdRng {
 fn parse_basic_kinds() {
     let text = "\
 # 多测模式：重复 3 次
-行:
-    整数 n: 1, 100
-    浮点 x: 0, 1
-    浮点 y: 0, 1, 4
+line:
+    int n: 1, 100
+    float x: 0, 1
+    float y: 0, 1, 4
 a = ints(n, 1, 100)
 b = floats(3, 0, 1, 5)
 c = ints(int(1, 5), 1, 9)
@@ -38,9 +38,9 @@ F = matf(int(1, 5), n, 0, 1, 4)
 fn roundtrip_stable() {
     let text = "\
 # 多测模式：重复 3 次
-行:
-    整数 n: 1, 100
-    浮点 x: 0, 1, 4
+line:
+    int n: 1, 100
+    float x: 0, 1, 4
 a = ints(n, 1, 100)
 M = matrix(3, n, 0, 1)
 F = matf(int(1, 5), n, 0, 1, 4)
@@ -55,9 +55,9 @@ F = matf(int(1, 5), n, 0, 1, 4)
 #[test]
 fn roundtrip_no_repeat_no_prec() {
     let text = "\
-行:
-    整数 n: 1, 100
-    浮点 x: 0, 1
+line:
+    int n: 1, 100
+    float x: 0, 1
 a = ints(2*n, 1, 9)
 b = floats(3, 0, 1)
 ";
@@ -67,23 +67,23 @@ b = floats(3, 0, 1)
     // legacy 行为：`*` 运算符序列化时带空格（"2 * n"）
     assert_eq!(
         out,
-        "行:\n    整数 n: 1, 100\n    浮点 x: 0, 1\na = ints(2 * n, 1, 9)\nb = floats(3, 0, 1)"
+        "line:\n    int n: 1, 100\n    float x: 0, 1\na = ints(2 * n, 1, 9)\nb = floats(3, 0, 1)"
     );
 }
 
 #[test]
 fn repeat_comment_variants() {
     // 无次数 -> 1
-    let cfg = parse("# 多测模式\n行:\n    整数 n: 1, 2").expect("parse");
+    let cfg = parse("# 多测模式\nline:\n    int n: 1, 2").expect("parse");
     assert_eq!(cfg.repeat.unwrap().count, "1");
     // 中文冒号 + 次
-    let cfg = parse("# 多测模式：重复 5 次\n行:\n    整数 n: 1, 2").expect("parse");
+    let cfg = parse("# 多测模式：重复 5 次\nline:\n    int n: 1, 2").expect("parse");
     assert_eq!(cfg.repeat.unwrap().count, "5");
     // 英文冒号 + 无“次”
-    let cfg = parse("# 多测模式: 重复 12\n行:\n    整数 n: 1, 2").expect("parse");
+    let cfg = parse("# 多测模式: 重复 12\nline:\n    int n: 1, 2").expect("parse");
     assert_eq!(cfg.repeat.unwrap().count, "12");
     // 只在前 8 行内识别
-    let cfg = parse("\n\n\n\n\n\n\n\n# 多测模式：重复 5 次\n行:\n    整数 n: 1, 2\n").expect("parse");
+    let cfg = parse("\n\n\n\n\n\n\n\n# 多测模式：重复 5 次\nline:\n    int n: 1, 2\n").expect("parse");
     assert!(cfg.repeat.is_none());
 }
 
@@ -91,16 +91,16 @@ fn repeat_comment_variants() {
 fn comments_and_blank_lines_ignored() {
     let text = "\
 # 注释行
-行:
-    整数 n: 1, 100   # 行尾注释不被解析
+line:
+    int n: 1, 100   # 行尾注释不被解析
 ";
     // 行尾注释进入行内项参数 -> 解析失败（legacy 行为一致）
     assert!(parse(text).is_err());
     let text2 = "\
 # 注释行
 
-行:
-    整数 n: 1, 100
+line:
+    int n: 1, 100
 ";
     let cfg = parse(text2).expect("parse");
     assert_eq!(cfg.items.len(), 1);
@@ -132,33 +132,34 @@ fn top_level_scalar_rejected_with_guide() {
 #[test]
 fn full_commands_roundtrip() {
     let text = "\
-行:
-    整数 n: 1, 100
-    字符串 s: 10
-    字符串 s2: 5, \"01\"
+line:
+    int n: 1, 100
+    str s: 10
+    str s2: 5, \"01\"
 p = perm(n)
 b = binseq(n, 3)
 iv = intervals(n, 1, 10)
 ps = points(n, 0, 9, 0, 9)
 t = tree(n)
 tw = tree(n, int(1, 100))
-tv = tree(n, w=float(0, 1, 4), val=int(1, 9))
+tv = tree(n, float(0, 1, 4))
 g = graph(n, int(n, n*n), 1, 0)
 gd = graph(n, 10, 1, 0, type=\"dag\")
 gb = graph(n, 10, 0, 0, type=\"bipartite\")
-gw = graph(n, 20, 1, 1, w=int(1, 10), val=float(0, 1))
+gw = graph(n, 20, 1, 1, int(1, 10))
 r = ring(5)
-rw = ring(5, w=int(1, 10), val=float(0, 1))
+rw = ring(5, int(1, 10))
 br = base_ring(n, 3)
-brw = base_ring(n, 4, w=float(0, 1, 4))
+brw = base_ring(n, 4, float(0, 1, 4))
 ";
     let cfg = parse(text).expect("parse all commands");
     assert_eq!(cfg.items.len(), 16);
     let out = serialize(&cfg).expect("serialize");
     let cfg2 = parse(&out).expect("re-parse");
     assert_eq!(cfg, cfg2, "全命令往返 IR 一致");
-    assert!(out.contains("ring(5, w=int(1, 10), val=float(0, 1))"), "{out}");
-    assert!(out.contains("base_ring(n, 4, w=float(0, 1, 4))"), "{out}");
+    assert!(out.contains("ring(5, int(1, 10))"), "{out}");
+    assert!(out.contains("base_ring(n, 4, float(0, 1, 4))"), "{out}");
+    assert!(out.contains("tree(n, float(0, 1, 4))"), "{out}");
 }
 
 #[test]
@@ -175,16 +176,16 @@ fn err_bad_weight() {
 
 #[test]
 fn err_reserved_word_name() {
-    let e = parse("行:\n    整数 int: 1, 2").expect_err("reserved");
+    let e = parse("line:\n    int int: 1, 2").expect_err("reserved");
     assert!(e.message.contains("保留字"), "{e}");
-    // 中文关键字不是合法变量名
-    let e = parse("行:\n    整数 行: 1, 2").expect_err("cn reserved");
-    assert!(e.message.contains("非法变量名"), "{e}");
+    // line 也是保留字
+    let e = parse("line:\n    int line: 1, 2").expect_err("line reserved");
+    assert!(e.message.contains("保留字"), "{e}");
 }
 
 #[test]
 fn err_duplicate_name() {
-    let e = parse("行:\n    整数 n: 1, 2\n    整数 n: 3, 4").expect_err("should fail");
+    let e = parse("line:\n    int n: 1, 2\n    int n: 3, 4").expect_err("should fail");
     assert_eq!(e.line, Some(3));
     assert!(e.message.contains("变量名重复"), "{e}");
 }
@@ -192,7 +193,7 @@ fn err_duplicate_name() {
 #[test]
 fn err_bad_indent() {
     // 行块内的缩进行必须是行内项（此处是命令形式 -> 行内项类型错误）
-    let e = parse("行:\n    整数 n: 1, 2\n    m = ints(3, 1, 9)").expect_err("should fail");
+    let e = parse("line:\n    int n: 1, 2\n    m = ints(3, 1, 9)").expect_err("should fail");
     assert_eq!(e.line, Some(3));
     assert!(e.message.contains("行内项"), "{e}");
     // 顶层缩进
@@ -222,7 +223,7 @@ fn err_extra_close_paren_no_panic() {
         "a = ints(3), 9)",
         "t = tree(5, w=int(1, 10)))",
         "a = ints(3, ))",
-        "行:\n    整数 n: 1, 2))",
+        "line:\n    int n: 1, 2))",
     ] {
         if let Err(e) = parse(text) {
             assert!(!e.message.is_empty(), "{text}");
@@ -256,19 +257,19 @@ fn err_kw_dup() {
 #[test]
 fn line_block_errors() {
     // 行块嵌套
-    let e = parse("行:\n    行:\n        整数 n: 1, 2").expect_err("nested");
+    let e = parse("line:\n    line:\n        int n: 1, 2").expect_err("nested");
     assert!(e.message.contains("嵌套"), "{e}");
     // 行块缺冒号
-    let e = parse("行 (3)").expect_err("no colon");
-    assert!(e.message.contains("行 (N):"), "{e}");
+    let e = parse("line (3)").expect_err("no colon");
+    assert!(e.message.contains("line (N):"), "{e}");
     // 行块空
-    let e = parse("行:").expect_err("empty block");
+    let e = parse("line:").expect_err("empty block");
     assert!(e.message.contains("至少需要一个子项"), "{e}");
     // 行内项缺类型
-    let e = parse("行:\n    n: 1, 2").expect_err("no kind");
-    assert!(e.message.contains("整数/浮点/文本/表达式/字符串"), "{e}");
+    let e = parse("line:\n    n: 1, 2").expect_err("no kind");
+    assert!(e.message.contains("int / float / text / expr / str"), "{e}");
     // 行内项缺冒号
-    let e = parse("行:\n    整数 n 1, 2").expect_err("no colon item");
+    let e = parse("line:\n    int n 1, 2").expect_err("no colon item");
     assert!(e.message.contains("缺少冒号"), "{e}");
 }
 
@@ -369,7 +370,7 @@ fn unknown_ast_node_string_in_expr() {
 #[test]
 fn validate_ref_rule() {
     // 数组不可作为引用源
-    let cfg = parse("a = ints(5, 1, 9)\n行:\n    整数 n: a, 100").expect("parse");
+    let cfg = parse("a = ints(5, 1, 9)\nline:\n    int n: a, 100").expect("parse");
     let errs = validate(&cfg);
     assert_eq!(errs.len(), 1, "{errs:?}");
     assert!(errs[0].message.contains("不可作为引用源"), "{errs:?}");
@@ -378,11 +379,11 @@ fn validate_ref_rule() {
 
 #[test]
 fn validate_undefined_ref() {
-    let cfg = parse("行:\n    整数 n: m, 100").expect("parse");
+    let cfg = parse("line:\n    int n: m, 100").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("未定义的变量")), "{errs:?}");
     // 前向引用同样拒绝
-    let cfg = parse("行:\n    整数 n: m, 100\n    整数 m: 1, 5").expect("parse");
+    let cfg = parse("line:\n    int n: m, 100\n    int m: 1, 5").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("未定义的变量")), "{errs:?}");
 }
@@ -391,7 +392,7 @@ fn validate_undefined_ref() {
 fn validate_ref_scale_of_structure_ok() {
     // perm/tree/graph 引用取其规模值，合法
     let cfg = parse(
-        "t = tree(10)\na = ints(t, 1, 5)\np = perm(6)\ng = graph(8, 5, 0, 0)\n行:\n    整数 m: p + g, t",
+        "t = tree(10)\na = ints(t, 1, 5)\np = perm(6)\ng = graph(8, 5, 0, 0)\nline:\n    int m: p + g, t",
     )
     .expect("parse");
     let errs = validate(&cfg);
@@ -400,7 +401,7 @@ fn validate_ref_scale_of_structure_ok() {
 
 #[test]
 fn validate_const_range() {
-    let cfg = parse("行:\n    整数 n: 5, 4").expect("parse");
+    let cfg = parse("line:\n    int n: 5, 4").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("最小值不能大于最大值")), "{errs:?}");
 }
@@ -439,9 +440,9 @@ fn validate_binseq_k() {
 #[test]
 fn validate_clean_config() {
     let text = "\
-行:
-    整数 n: 1, 100
-    浮点 x: 0, 1, 4
+line:
+    int n: 1, 100
+    float x: 0, 1, 4
 a = ints(n, 1, 100)
 p = perm(n)
 t = tree(n, int(1, 10))
@@ -468,12 +469,12 @@ fn validate_bad_weight_range() {
 #[test]
 fn line_block_roundtrip() {
     let text = "\
-行:
-    整数 n: 1, 100
-    浮点 x: 0, 1
-    文本 s: \"---\"
-    表达式 e: 2 * n
-    字符串 c: 10, \"ab\"
+line:
+    int n: 1, 100
+    float x: 0, 1
+    text s: \"---\"
+    expr e: 2 * n
+    str c: 10, \"ab\"
 ";
     let cfg = parse(text).expect("parse");
     let out = serialize(&cfg).expect("serialize");
@@ -485,7 +486,7 @@ fn line_block_roundtrip() {
 #[test]
 fn line_block_generate_mixed() {
     let cfg = parse(
-        "行:\n    整数 n: 5, 5\n    浮点 x: 1, 1\n    文本 s: \"---\"\n    表达式 e: 2 * n\n",
+        "line:\n    int n: 5, 5\n    float x: 1, 1\n    text s: \"---\"\n    expr e: 2 * n\n",
     )
     .expect("parse");
     let errs = validate(&cfg);
@@ -497,18 +498,18 @@ fn line_block_generate_mixed() {
 #[test]
 fn line_block_text_validation() {
     // 文本为空报错
-    let cfg = parse("行:\n    文本 s: \"\"").expect("parse");
+    let cfg = parse("line:\n    text s: \"\"").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("不能为空")), "{errs:?}");
     // 文本含双引号 -> tokenizer 报字符串未闭合
-    let e = parse("行:\n    文本 s: \"a\\\"b\"").expect_err("quote in text");
+    let e = parse("line:\n    text s: \"a\\\"b\"").expect_err("quote in text");
     assert!(e.message.contains("字符串缺少结束引号"), "{e}");
 }
 
 #[test]
 fn line_block_str_random_len() {
     // 字符串长度可区间随机
-    let cfg = parse("行:\n    字符串 c: int(3, 5), \"01\"").expect("parse");
+    let cfg = parse("line:\n    str c: int(3, 5), \"01\"").expect("parse");
     let lines = generate(&cfg, Some(0)).unwrap();
     let len = lines[0].len();
     assert!((3..=5).contains(&len), "{lines:?}");
@@ -517,7 +518,7 @@ fn line_block_str_random_len() {
 #[test]
 fn line_refs_within_line() {
     // 同一行内后者可引用前者
-    let cfg = parse("行:\n    整数 n: 1, 10\n    表达式 m: 2 * n").expect("parse");
+    let cfg = parse("line:\n    int n: 1, 10\n    expr m: 2 * n").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.is_empty(), "{errs:?}");
     let lines = generate(&cfg, Some(1)).unwrap();
@@ -528,7 +529,7 @@ fn line_refs_within_line() {
 #[test]
 fn line_refs_from_following_statements() {
     let cfg = parse(
-        "行:\n    整数 n: 5, 5\n    整数 m: 2, 2\na = ints(m, 5, 5)",
+        "line:\n    int n: 5, 5\n    int m: 2, 2\na = ints(m, 5, 5)",
     )
     .expect("parse");
     let errs = validate(&cfg);
@@ -540,7 +541,7 @@ fn line_refs_from_following_statements() {
 
 #[test]
 fn line_scalar_float_output() {
-    let cfg = parse("行:\n    表达式 x: float(1, 2) / 4").expect("parse");
+    let cfg = parse("line:\n    expr x: float(1, 2) / 4").expect("parse");
     let lines = generate(&cfg, Some(0)).unwrap();
     assert!(lines[0].contains('.'), "浮点结果带小数：{lines:?}");
 }
@@ -551,17 +552,17 @@ fn line_scalar_float_output() {
 
 #[test]
 fn line_repeat_roundtrip() {
-    let text = "行 (3):\n    整数 n: 1, 5\n    表达式 m: 2 * n\n";
+    let text = "line (3):\n    int n: 1, 5\n    expr m: 2 * n\n";
     let cfg = parse(text).expect("parse");
     let out = serialize(&cfg).expect("serialize");
-    assert_eq!(out, "行 (3):\n    整数 n: 1, 5\n    表达式 m: 2 * n");
+    assert_eq!(out, "line (3):\n    int n: 1, 5\n    expr m: 2 * n");
     let cfg2 = parse(&out).expect("re-parse");
     assert_eq!(cfg, cfg2);
 }
 
 #[test]
 fn line_repeat_generate() {
-    let cfg = parse("行 (3):\n    整数 n: 1, 10\n    表达式 m: 2 * n").expect("parse");
+    let cfg = parse("line (3):\n    int n: 1, 10\n    expr m: 2 * n").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.is_empty(), "{errs:?}");
     let lines = generate(&cfg, Some(2)).unwrap();
@@ -577,7 +578,7 @@ fn line_repeat_generate() {
 fn line_repeat_rows_expr() {
     // 行数可以是表达式（引用前面变量）
     let cfg = parse(
-        "行:\n    整数 k: 2, 2\n行 (k):\n    整数 n: 1, 5\n    表达式 m: 2 * n",
+        "line:\n    int k: 2, 2\nline (k):\n    int n: 1, 5\n    expr m: 2 * n",
     )
     .expect("parse");
     let errs = validate(&cfg);
@@ -588,7 +589,7 @@ fn line_repeat_rows_expr() {
 
 #[test]
 fn line_repeat_zero_rejected() {
-    let cfg = parse("行 (0):\n    整数 n: 1, 5").expect("parse");
+    let cfg = parse("line (0):\n    int n: 1, 5").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("不能小于 1")), "{errs:?}");
 }
@@ -597,7 +598,7 @@ fn line_repeat_zero_rejected() {
 fn line_repeat_name_array_ref() {
     // repeat(3) 后 n、m 数组化，x = n[2] 取第 2 行 n
     let cfg = parse(
-        "行 (3):\n    整数 n: 1, 5\n    整数 m: 1, 5\n行:\n    表达式 x: n[2]\n    表达式 y: m[1]",
+        "line (3):\n    int n: 1, 5\n    int m: 1, 5\nline:\n    expr x: n[2]\n    expr y: m[1]",
     )
     .expect("parse");
     let errs = validate(&cfg);
@@ -614,7 +615,7 @@ fn line_repeat_name_array_ref() {
 #[test]
 fn line_repeat_scalar_ref_rejected() {
     let cfg = parse(
-        "行 (3):\n    整数 n: 1, 5\n    整数 m: 1, 5\n行:\n    表达式 x: n + 1",
+        "line (3):\n    int n: 1, 5\n    int m: 1, 5\nline:\n    expr x: n + 1",
     )
     .expect("parse");
     let errs = validate(&cfg);
@@ -623,7 +624,7 @@ fn line_repeat_scalar_ref_rejected() {
 
 #[test]
 fn line_repeat_index_oob() {
-    let cfg = parse("行 (3):\n    整数 n: 1, 5\n行:\n    表达式 x: n[5]").expect("parse");
+    let cfg = parse("line (3):\n    int n: 1, 5\nline:\n    expr x: n[5]").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("越界")), "{errs:?}");
 }
@@ -631,7 +632,7 @@ fn line_repeat_index_oob() {
 #[test]
 fn single_row_line_not_indexable() {
     // 不重复的行变量是标量，不能索引
-    let cfg = parse("行:\n    整数 n: 1, 5\n行:\n    表达式 x: n[1]").expect("parse");
+    let cfg = parse("line:\n    int n: 1, 5\nline:\n    expr x: n[1]").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("不是数组")), "{errs:?}");
 }
@@ -643,7 +644,7 @@ fn single_row_line_not_indexable() {
 #[test]
 fn index_single_row_array() {
     let cfg = parse(
-        "a = ints(3, 10, 10)\n行:\n    整数 first: a[1], a[1]\n    整数 last: a[3], a[3]",
+        "a = ints(3, 10, 10)\nline:\n    int first: a[1], a[1]\n    int last: a[3], a[3]",
     )
     .expect("parse");
     let errs = validate(&cfg);
@@ -656,7 +657,7 @@ fn index_single_row_array() {
 #[test]
 fn index_matrix() {
     let cfg = parse(
-        "M = matrix(2, 3, 5, 5)\n行:\n    整数 x: M[1][2], M[1][2]\n    整数 y: M[2][3], M[2][3]",
+        "M = matrix(2, 3, 5, 5)\nline:\n    int x: M[1][2], M[1][2]\n    int y: M[2][3], M[2][3]",
     )
     .expect("parse");
     let errs = validate(&cfg);
@@ -670,21 +671,21 @@ fn index_matrix() {
 #[test]
 fn index_validate_layer_mismatch() {
     // 矩阵单层索引
-    let cfg = parse("M = matrix(2, 3, 1, 9)\n行:\n    整数 x: M[1], 9").expect("parse");
+    let cfg = parse("M = matrix(2, 3, 1, 9)\nline:\n    int x: M[1], 9").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("需要 2 个索引")), "{errs:?}");
     // 单行数组双层索引
-    let cfg = parse("a = ints(3, 1, 9)\n行:\n    整数 x: a[1][2], 9").expect("parse");
+    let cfg = parse("a = ints(3, 1, 9)\nline:\n    int x: a[1][2], 9").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("需要 1 个索引")), "{errs:?}");
 }
 
 #[test]
 fn index_validate_oob() {
-    let cfg = parse("a = ints(3, 1, 9)\n行:\n    整数 x: a[5], 9").expect("parse");
+    let cfg = parse("a = ints(3, 1, 9)\nline:\n    int x: a[5], 9").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("越界")), "{errs:?}");
-    let cfg = parse("M = matrix(2, 3, 1, 9)\n行:\n    整数 x: M[3][1], 9").expect("parse");
+    let cfg = parse("M = matrix(2, 3, 1, 9)\nline:\n    int x: M[3][1], 9").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("越界")), "{errs:?}");
 }
@@ -692,7 +693,7 @@ fn index_validate_oob() {
 #[test]
 fn index_non_array_rejected() {
     // 单行行变量（标量）索引
-    let cfg = parse("行:\n    整数 n: 1, 9\n行:\n    表达式 x: n[1]").expect("parse");
+    let cfg = parse("line:\n    int n: 1, 9\nline:\n    expr x: n[1]").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("不是数组")), "{errs:?}");
 }
@@ -701,7 +702,7 @@ fn index_non_array_rejected() {
 fn index_runtime_oob() {
     // 行数/索引含变量，静态无法判定 -> 生成期报错（错误行号为行块起始行）
     let cfg = parse(
-        "a = ints(2, 1, 9)\n行:\n    整数 k: 3, 3\n行:\n    表达式 x: a[k]",
+        "a = ints(2, 1, 9)\nline:\n    int k: 3, 3\nline:\n    expr x: a[k]",
     )
     .expect("parse");
     let e = generate(&cfg, Some(0)).expect_err("runtime oob");
@@ -711,7 +712,100 @@ fn index_runtime_oob() {
 
 #[test]
 fn index_into_string_item_rejected() {
-    let cfg = parse("行:\n    字符串 s: 3, \"ab\"\n行:\n    表达式 x: s[1]").expect("parse");
+    let cfg = parse("line:\n    str s: 3, \"ab\"\nline:\n    expr x: s[1]").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("不是数组")), "{errs:?}");
+}
+
+// --------------------------------------------------------------------------- //
+// 新功能：重边/自环/树类型/val 移除/点集容量
+// --------------------------------------------------------------------------- //
+
+#[test]
+fn graph_multi_loop_generate() {
+    // multi=1 允许重边（m 超过无重边上限），loop=1 允许自环
+    let cfg = parse("g = graph(3, 20, 0, 0, multi=1, loop=1)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(1)).unwrap();
+    assert_eq!(lines.len(), 20, "multi 模式输出 20 条边：{lines:?}");
+    // 应能出现自环
+    let has_loop = lines.iter().any(|l| {
+        let p: Vec<&str> = l.split_whitespace().collect();
+        p[0] == p[1]
+    });
+    assert!(has_loop, "loop=1 应产生自环：{lines:?}");
+}
+
+#[test]
+fn graph_multi_loop_roundtrip() {
+    let text = "g = graph(5, 20, 1, 1, multi=1, loop=1, int(1, 9))\n";
+    let cfg = parse(text).expect("parse");
+    let out = serialize(&cfg).expect("serialize");
+    assert_eq!(out, "g = graph(5, 20, 1, 1, int(1, 9), multi=1, loop=1)");
+    let cfg2 = parse(&out).expect("re-parse");
+    assert_eq!(cfg, cfg2);
+}
+
+#[test]
+fn graph_no_multi_limit_enforced() {
+    // 无重边时 m 超上限报错（n=3 无向无自环上限 3）
+    let cfg = parse("g = graph(3, 4, 0, 0)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("超过上限")), "{errs:?}");
+    // 允许自环后上限 6
+    let cfg = parse("g = graph(3, 6, 0, 0, loop=1)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    // 7 条超上限
+    let cfg = parse("g = graph(3, 7, 0, 0, loop=1)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("超过上限")), "{errs:?}");
+}
+
+#[test]
+fn val_removed_rejected() {
+    let e = parse("t = tree(5, val=int(1, 9))\n").expect_err("val removed");
+    assert!(e.message.contains("已移除"), "{e}");
+    let e = parse("g = graph(5, 5, 1, 0, val=int(1, 9))\n").expect_err("val removed");
+    assert!(e.message.contains("已移除"), "{e}");
+}
+
+#[test]
+fn tree_type_roundtrip() {
+    let text = "t = tree(5, type=\"star\", int(1, 9))\nc = tree(6, type=\"chain\")\n";
+    let cfg = parse(text).expect("parse");
+    let out = serialize(&cfg).expect("serialize");
+    assert_eq!(out, "t = tree(5, type=\"star\", int(1, 9))\nc = tree(6, type=\"chain\")");
+    let cfg2 = parse(&out).expect("re-parse");
+    assert_eq!(cfg, cfg2);
+}
+
+#[test]
+fn star_min_n() {
+    let cfg = parse("t = tree(1, type=\"star\")\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains(">= 2")), "{errs:?}");
+}
+
+#[test]
+fn points_capacity() {
+    // 点个数超过坐标组合数
+    let cfg = parse("ps = points(26, 0, 4, 0, 4)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("超过可用坐标组合数")), "{errs:?}");
+    // 25 = 5*5 恰好够
+    let cfg = parse("ps = points(25, 0, 4, 0, 4)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+}
+
+#[test]
+fn charset_dedup_generate() {
+    // 字符集含重复字符：生成时去重
+    let cfg = parse("line:\n    str s: 10, \"aaaaab\"\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(0)).unwrap();
+    assert!(lines[0].chars().all(|c| c == 'a' || c == 'b'), "{lines:?}");
 }

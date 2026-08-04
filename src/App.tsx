@@ -29,16 +29,7 @@ function loadJson<T>(key: string, fallback: T): T {
   }
 }
 
-const SAMPLE_DSL = `# 多测模式：重复 3 次
-行:
-    整数 n: 1, 100
-    浮点 x: 0, 1, 4
-    表达式 e: 2 * n
-a = ints(n, 1, 100)
-p = perm(n)
-t = tree(n, w=int(1, 100))
-g = graph(n, 50, 1, 0, w=int(1, 9))
-`;
+const SAMPLE_DSL = "";
 
 export default function App() {
   const [status, setStatus] = useState("正在连接后端……");

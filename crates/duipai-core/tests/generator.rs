@@ -1,6 +1,6 @@
 //! 生成引擎测试：种子可复现、各类型输出形态、多测、动态错误。
 
-use duipai_core::{format_float, generate, parse};
+use duipai_core::{format_float, generate, parse, validate};
 
 #[test]
 fn format_float_matches_legacy() {
@@ -15,9 +15,9 @@ fn format_float_matches_legacy() {
 #[test]
 fn seed_reproducible() {
     let text = "\
-行:
-    整数 n: 1, 100
-    浮点 x: 0, 1, 4
+line:
+    int n: 1, 100
+    float x: 0, 1, 4
 a = ints(n, 1, 100)
 p = perm(n)
 t = tree(n, w=int(1, 10))
@@ -36,7 +36,7 @@ br = base_ring(n, 3)
 
 #[test]
 fn multi_test_shape() {
-    let cfg = parse("# 多测模式：重复 3 次\n行:\n    整数 n: 5, 9\na = ints(n, 1, 9)\n").unwrap();
+    let cfg = parse("# 多测模式：重复 3 次\nline:\n    int n: 5, 9\na = ints(n, 1, 9)\n").unwrap();
     let lines = generate(&cfg, Some(1)).unwrap();
     assert_eq!(lines[0], "3", "首行输出组数");
     // 每组：1 行 n + 1 行数组
@@ -45,7 +45,7 @@ fn multi_test_shape() {
 
 #[test]
 fn int_var_output() {
-    let cfg = parse("行:\n    整数 n: 5, 5\n    整数 m: n, n\n").unwrap();
+    let cfg = parse("line:\n    int n: 5, 5\n    int m: n, n\n").unwrap();
     let lines = generate(&cfg, Some(0)).unwrap();
     assert_eq!(lines, vec!["5 5"]);
 }
@@ -63,9 +63,8 @@ fn perm_output() {
 fn tree_shape() {
     let cfg = parse("t = tree(6, w=int(1, 5))\n").unwrap();
     let lines = generate(&cfg, Some(3)).unwrap();
-    assert_eq!(lines[0], "6");
-    assert_eq!(lines.len(), 6, "1 行 n + 5 条边");
-    for l in &lines[1..] {
+    assert_eq!(lines.len(), 5, "无规模行，只输出 5 条边：{lines:?}");
+    for l in &lines {
         let parts: Vec<&str> = l.split_whitespace().collect();
         assert_eq!(parts.len(), 3, "边权树边应有 3 个字段：{l}");
         assert!(parts[0] != parts[1]);
@@ -73,22 +72,33 @@ fn tree_shape() {
 }
 
 #[test]
-fn tree_val_shape() {
-    let cfg = parse("t = tree(4, val=int(1, 9))\n").unwrap();
+fn tree_star_chain() {
+    let cfg = parse("t = tree(5, type=\"star\")\nc = tree(5, type=\"chain\")\n").unwrap();
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
     let lines = generate(&cfg, Some(3)).unwrap();
-    assert_eq!(lines[0], "4");
-    assert_eq!(lines[1].split_whitespace().count(), 4, "节点权值行");
-    assert_eq!(lines.len(), 1 + 1 + 3);
+    assert_eq!(lines.len(), 4 + 4, "菊花图 4 边 + 链 4 边：{lines:?}");
+    // 菊花图：中心 1 出现在所有边上
+    for l in &lines[..4] {
+        assert!(l.split_whitespace().any(|p| p == "1"), "菊花图中心 1：{l}");
+    }
+    // 链：每条边端点合并后能连成通路（顶点数 5）
+    let mut used = std::collections::HashSet::new();
+    for l in &lines[4..] {
+        for p in l.split_whitespace().take(2) {
+            used.insert(p.to_string());
+        }
+    }
+    assert_eq!(used.len(), 5, "链覆盖全部顶点：{lines:?}");
 }
 
 #[test]
 fn graph_general_shape() {
     let cfg = parse("g = graph(5, 6, 0, 1, w=int(1, 3))\n").unwrap();
     let lines = generate(&cfg, Some(5)).unwrap();
-    assert_eq!(lines[0], "5 6");
-    assert_eq!(lines.len(), 7);
+    assert_eq!(lines.len(), 6, "无规模行，只输出 6 条边：{lines:?}");
     // 连通无向图，每条边无自环
-    for l in &lines[1..] {
+    for l in &lines {
         let parts: Vec<&str> = l.split_whitespace().collect();
         assert_eq!(parts.len(), 3);
         assert_ne!(parts[0], parts[1]);
@@ -99,17 +109,16 @@ fn graph_general_shape() {
 fn graph_ring_base_ring() {
     let cfg = parse("r = ring(5)\nbr = base_ring(6, 3)\n").unwrap();
     let lines = generate(&cfg, Some(1)).unwrap();
-    assert_eq!(lines[0], "5");
-    assert_eq!(lines.len(), 1 + 5 + 1 + 6, "环 5 边 + 基环树 6 边");
+    assert_eq!(lines.len(), 5 + 6, "环 5 边 + 基环树 6 边（无规模行）：{lines:?}");
 }
 
 #[test]
 fn dag_bipartite() {
     let cfg = parse("g = graph(6, 5, 1, 0, type=\"dag\")\nb = graph(6, 5, 0, 0, type=\"bipartite\")\n").unwrap();
     let lines = generate(&cfg, Some(2)).unwrap();
-    assert_eq!(lines.len(), 1 + 5 + 1 + 5);
+    assert_eq!(lines.len(), 5 + 5, "DAG 5 边 + 二分 5 边（无规模行）：{lines:?}");
     // DAG：u < v
-    for l in &lines[1..6] {
+    for l in &lines[..5] {
         let p: Vec<i64> = l.split_whitespace().map(|x| x.parse().unwrap()).collect();
         assert!(p[0] < p[1], "DAG 边应 u<v：{l}");
     }
@@ -130,7 +139,7 @@ fn binseq_intervals_points() {
 
 #[test]
 fn string_and_float_array() {
-    let cfg = parse("行:\n    字符串 s: 5, \"01\"\nf = floats(3, 0, 1, 2)\n").unwrap();
+    let cfg = parse("line:\n    str s: 5, \"01\"\nf = floats(3, 0, 1, 2)\n").unwrap();
     let lines = generate(&cfg, Some(0)).unwrap();
     assert_eq!(lines[0].len(), 5);
     assert!(lines[0].chars().all(|c| c == '0' || c == '1'));
@@ -143,7 +152,7 @@ fn string_and_float_array() {
 #[test]
 fn dynamic_range_error() {
     // 引用导致的范围错误（静态无法判定，生成期报错），带变量行号
-    let cfg = parse("行:\n    整数 n: 1, 2\na = ints(1, n+1, n)\n").unwrap();
+    let cfg = parse("line:\n    int n: 1, 2\na = ints(1, n+1, n)\n").unwrap();
     let e = generate(&cfg, Some(0)).expect_err("should fail");
     assert!(e.message.contains("数组元素范围"), "{e}");
     assert_eq!(e.line, Some(3));
@@ -158,7 +167,7 @@ fn empty_config() {
 
 #[test]
 fn repeat_bad_count() {
-    let cfg = parse("# 多测模式：重复 0 次\n行:\n    整数 n: 1, 2\n").unwrap();
+    let cfg = parse("# 多测模式：重复 0 次\nline:\n    int n: 1, 2\n").unwrap();
     let e = generate(&cfg, Some(0)).expect_err("should fail");
     assert!(e.message.contains(">= 1"), "{e}");
 }

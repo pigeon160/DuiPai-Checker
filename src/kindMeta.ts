@@ -4,8 +4,7 @@ import type { Item, VarKind, Weight, ElemType } from "./api";
 export const RESERVED_COMMANDS = new Set([
   "ints", "floats", "matrix", "matf", "perm", "binseq", "intervals", "points",
   "tree", "graph", "ring", "base_ring", "repeat",
-  "行", "整数", "浮点", "文本", "表达式", "字符串",
-  "int", "float", "str", "strs",
+  "line", "int", "float", "text", "expr", "str",
 ]);
 
 /** 变量名格式：字母/下划线开头，后跟字母数字下划线。 */
@@ -51,12 +50,14 @@ export const KIND_ORDER: { kind: VarKind; label: string }[] = [
   { kind: { Binseq: { n: "10", k: "5" } }, label: "0/1 序列" },
   { kind: { Intervals: { n: "5", lo: "1", hi: "10" } }, label: "区间" },
   { kind: { Points: { n: "5", xlo: "0", xhi: "9", ylo: "0", yhi: "9" } }, label: "点集" },
-  { kind: { Tree: { n: "10", w: null, val: null } }, label: "树" },
-  { kind: { Graph: { gtype: "General", n: "10", m: "15", directed: true, connected: false, k: null, w: null, val: null } }, label: "图" },
-  { kind: { Graph: { gtype: "Dag", n: "10", m: "15", directed: true, connected: false, k: null, w: null, val: null } }, label: "图（DAG）" },
-  { kind: { Graph: { gtype: "Bipartite", n: "10", m: "15", directed: false, connected: false, k: null, w: null, val: null } }, label: "图（二分）" },
-  { kind: { Graph: { gtype: "Ring", n: "5", m: "5", directed: false, connected: true, k: null, w: null, val: null } }, label: "环" },
-  { kind: { Graph: { gtype: "BaseRing", n: "8", m: "8", directed: false, connected: true, k: "3", w: null, val: null } }, label: "基环树" },
+  { kind: { Tree: { n: "10", ttype: "Random", w: null } }, label: "树" },
+  { kind: { Tree: { n: "10", ttype: "Star", w: null } }, label: "树（菊花图）" },
+  { kind: { Tree: { n: "10", ttype: "Chain", w: null } }, label: "树（链）" },
+  { kind: { Graph: { gtype: "General", n: "10", m: "15", directed: true, connected: false, multi: false, loop_: false, k: null, w: null } }, label: "图" },
+  { kind: { Graph: { gtype: "Dag", n: "10", m: "15", directed: true, connected: false, multi: false, loop_: false, k: null, w: null } }, label: "图（DAG）" },
+  { kind: { Graph: { gtype: "Bipartite", n: "10", m: "15", directed: false, connected: false, multi: false, loop_: false, k: null, w: null } }, label: "图（二分）" },
+  { kind: { Graph: { gtype: "Ring", n: "5", m: "5", directed: false, connected: true, multi: false, loop_: false, k: null, w: null } }, label: "环" },
+  { kind: { Graph: { gtype: "BaseRing", n: "8", m: "8", directed: false, connected: true, multi: false, loop_: false, k: "3", w: null } }, label: "基环树" },
 ];
 
 export function kindLabel(kind: VarKind): string {
@@ -69,7 +70,14 @@ export function kindLabel(kind: VarKind): string {
     case "Binseq": return "0/1 序列";
     case "Intervals": return "区间";
     case "Points": return "点集";
-    case "Tree": return "树";
+    case "Tree": {
+      const t = k.Tree as { ttype: string };
+      switch (t.ttype) {
+        case "Star": return "树（菊花图）";
+        case "Chain": return "树（链）";
+        default: return "树";
+      }
+    }
     case "Graph": {
       const g = k.Graph as { gtype: string };
       switch (g.gtype) {

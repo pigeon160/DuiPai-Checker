@@ -375,20 +375,36 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                 if !(xok && yok) {
                     errors.push(DslError::at(line, "点坐标范围无效"));
                 }
+                // 容量：n > 可用坐标组合数（常量可判定时）
+                if let (Ok(Some(nv)), Ok(Some(xlo)), Ok(Some(xhi)), Ok(Some(ylo)), Ok(Some(yhi))) =
+                    (try_const(n), try_const(xlo), try_const(xhi), try_const(ylo), try_const(yhi))
+                {
+                    let nv = nv.floor() as i64;
+                    let combos = (xhi.floor() as i64 - xlo.floor() as i64 + 1)
+                        * (yhi.floor() as i64 - ylo.floor() as i64 + 1);
+                    if nv > combos {
+                        errors.push(DslError::at(
+                            line,
+                            format!("点个数 n={nv} 超过可用坐标组合数 {combos}"),
+                        ));
+                    }
+                }
             }
-            VarKind::Tree { n, w, val } => {
+            VarKind::Tree { n, ttype, w } => {
                 check_field(n, "树顶点数", &types, &mut errors, line);
-                check_const(n, "树顶点数", "树顶点数 n 应 >= 1", |v| v >= 1.0, &mut errors, line);
+                let min_n = if *ttype == crate::ast::TreeType::Star { 2.0 } else { 1.0 };
+                check_const(n, "树顶点数", "菊花图 n 应 >= 2", |v| v >= min_n, &mut errors, line);
+                if *ttype != crate::ast::TreeType::Star {
+                    check_const(n, "树顶点数", "树顶点数 n 应 >= 1", |v| v >= 1.0, &mut errors, line);
+                }
                 check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
-                check_weight(val.as_ref(), "节点权值范围", "节点权值精度", &types, &mut errors, line);
             }
-            VarKind::Graph { gtype, n, m, directed, connected, k, w, val } => {
+            VarKind::Graph { gtype, n, m, directed, connected, multi, loop_, k, w } => {
                 match gtype {
                     GraphType::Ring => {
                         check_field(n, "环顶点数", &types, &mut errors, line);
                         check_const(n, "环顶点数", "环顶点数 n 应 >= 3", |v| v >= 3.0, &mut errors, line);
                         check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
-                        check_weight(val.as_ref(), "节点权值范围", "节点权值精度", &types, &mut errors, line);
                     }
                     GraphType::BaseRing => {
                         check_field(n, "基环树顶点数", &types, &mut errors, line);
@@ -403,7 +419,6 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                             _ => {}
                         }
                         check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
-                        check_weight(val.as_ref(), "节点权值范围", "节点权值精度", &types, &mut errors, line);
                     }
                     _ => {
                         let n_label = "图顶点数";
@@ -413,37 +428,45 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                         check_const(n, n_label, "图顶点数 n 应 >= 1", |v| v >= 1.0, &mut errors, line);
                         check_const(m, m_label, "图边数 m 不能为负", |v| v >= 0.0, &mut errors, line);
                         check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
-                        check_weight(val.as_ref(), "节点权值范围", "节点权值精度", &types, &mut errors, line);
-                        // 边数上限（常量可判定时）
-                        if let (Ok(Some(nv)), Ok(Some(mv))) = (try_const(n), try_const(m)) {
-                            let nv = nv.floor() as i64;
-                            let mv = mv.floor() as i64;
-                            match gtype {
-                                GraphType::Dag => {
-                                    let possible = nv * (nv - 1) / 2;
-                                    if mv > possible {
-                                        errors.push(DslError::at(line, format!("图边数 m={mv} 超过上限 {possible}（DAG，n={nv}）")));
-                                    }
-                                }
-                                GraphType::Bipartite => {
-                                    let left = nv / 2;
-                                    let right = nv - left;
-                                    if left < 1 || right < 1 {
-                                        errors.push(DslError::at(line, "二分图 n 过小，无法分两部"));
-                                    } else {
-                                        let possible = left * right;
+                        // 边数上限（常量可判定时；multi 允许重边则不限）
+                        if !*multi {
+                            if let (Ok(Some(nv)), Ok(Some(mv))) = (try_const(n), try_const(m)) {
+                                let nv = nv.floor() as i64;
+                                let mv = mv.floor() as i64;
+                                let loop_word = if *loop_ { "含自环" } else { "无自环" };
+                                match gtype {
+                                    GraphType::Dag => {
+                                        let possible = nv * (nv - 1) / 2;
                                         if mv > possible {
-                                            errors.push(DslError::at(line, format!("图边数 m={mv} 超过上限 {possible}（二分图，n={nv}）")));
+                                            errors.push(DslError::at(line, format!("图边数 m={mv} 超过上限 {possible}（DAG，n={nv}）")));
                                         }
                                     }
-                                }
-                                _ => {
-                                    let possible = if *directed { nv * (nv - 1) } else { nv * (nv - 1) / 2 };
-                                    if mv > possible {
-                                        errors.push(DslError::at(line, format!("图边数 m={mv} 超过上限 {possible}（{}，n={nv}）", if *directed { "有向" } else { "无向" })));
+                                    GraphType::Bipartite => {
+                                        let left = nv / 2;
+                                        let right = nv - left;
+                                        if left < 1 || right < 1 {
+                                            errors.push(DslError::at(line, "二分图 n 过小，无法分两部"));
+                                        } else {
+                                            let possible = left * right;
+                                            if mv > possible {
+                                                errors.push(DslError::at(line, format!("图边数 m={mv} 超过上限 {possible}（二分图，n={nv}）")));
+                                            }
+                                        }
                                     }
-                                    if *connected && mv < nv - 1 {
-                                        errors.push(DslError::at(line, "连通图要求 m >= n-1"));
+                                    _ => {
+                                        let possible = if *loop_ {
+                                            if *directed { nv * nv } else { nv * (nv + 1) / 2 }
+                                        } else if *directed {
+                                            nv * (nv - 1)
+                                        } else {
+                                            nv * (nv - 1) / 2
+                                        };
+                                        if mv > possible {
+                                            errors.push(DslError::at(line, format!("图边数 m={mv} 超过上限 {possible}（{}，{loop_word}，n={nv}）", if *directed { "有向" } else { "无向" })));
+                                        }
+                                        if *connected && mv < nv - 1 {
+                                            errors.push(DslError::at(line, "连通图要求 m >= n-1"));
+                                        }
                                     }
                                 }
                             }

@@ -43,21 +43,21 @@ pub fn is_single_row(rows: &str) -> bool {
 fn line_item_line(item: &crate::ast::LineItem) -> String {
     let name = &item.name;
     match &item.kind {
-        LineItemKind::Int { min, max } => format!("整数 {name}: {min}, {max}"),
+        LineItemKind::Int { min, max } => format!("int {name}: {min}, {max}"),
         LineItemKind::Float { min, max, prec } => {
             if prec == "6" {
-                format!("浮点 {name}: {min}, {max}")
+                format!("float {name}: {min}, {max}")
             } else {
-                format!("浮点 {name}: {min}, {max}, {prec}")
+                format!("float {name}: {min}, {max}, {prec}")
             }
         }
-        LineItemKind::Scalar { expr } => format!("表达式 {name}: {expr}"),
-        LineItemKind::Text { text } => format!("文本 {name}: \"{text}\""),
+        LineItemKind::Scalar { expr } => format!("expr {name}: {expr}"),
+        LineItemKind::Text { text } => format!("text {name}: \"{text}\""),
         LineItemKind::Str { len, charset } => {
             if charset == "abcdefghijklmnopqrstuvwxyz" {
-                format!("字符串 {name}: {len}")
+                format!("str {name}: {len}")
             } else {
-                format!("字符串 {name}: {len}, \"{charset}\"")
+                format!("str {name}: {len}, \"{charset}\"")
             }
         }
     }
@@ -70,9 +70,9 @@ pub fn lines_for(item: &Item) -> DslResult<Vec<String>> {
         VarKind::Line { rows, items } => {
             let mut out = Vec::new();
             if rows == "1" {
-                out.push("行:".to_string());
+                out.push("line:".to_string());
             } else {
-                out.push(format!("行 ({rows}):"));
+                out.push(format!("line ({rows}):"));
             }
             for it in items {
                 out.push(format!("    {}", line_item_line(it)));
@@ -110,15 +110,20 @@ pub fn lines_for(item: &Item) -> DslResult<Vec<String>> {
             ylo,
             yhi,
         } => vec![format!("{name} = points({n}, {xlo}, {xhi}, {ylo}, {yhi})")],
-        VarKind::Tree { n, w, val } => {
-            let mut base = format!("{name} = tree({n}");
+        VarKind::Tree { n, ttype, w } => {
+            let mut parts = vec![format!("{name} = tree({n}")];
+            if *ttype != crate::ast::TreeType::Random {
+                let t = match ttype {
+                    crate::ast::TreeType::Star => "star",
+                    crate::ast::TreeType::Chain => "chain",
+                    crate::ast::TreeType::Random => unreachable!(),
+                };
+                parts.push(format!("type=\"{t}\""));
+            }
             if let Some(w) = w {
-                base.push_str(&format!(", w={}", fmt_weight(w)));
+                parts.push(fmt_weight(w));
             }
-            if let Some(val) = val {
-                base.push_str(&format!(", val={}", fmt_weight(val)));
-            }
-            vec![format!("{base})")]
+            vec![format!("{})", parts.join(", "))]
         }
         VarKind::Graph {
             gtype,
@@ -126,50 +131,48 @@ pub fn lines_for(item: &Item) -> DslResult<Vec<String>> {
             m,
             directed,
             connected,
+            multi,
+            loop_,
             k,
             w,
-            val,
         } => match gtype {
             GraphType::Ring => {
-                let mut base = format!("{name} = ring({n}");
+                let mut parts = vec![format!("{name} = ring({n}")];
                 if let Some(w) = w {
-                    base.push_str(&format!(", w={}", fmt_weight(w)));
+                    parts.push(fmt_weight(w));
                 }
-                if let Some(val) = val {
-                    base.push_str(&format!(", val={}", fmt_weight(val)));
-                }
-                vec![format!("{base})")]
+                vec![format!("{})", parts.join(", "))]
             }
             GraphType::BaseRing => {
                 let k = k.as_deref().unwrap_or("3");
-                let mut base = format!("{name} = base_ring({n}, {k}");
+                let mut parts = vec![format!("{name} = base_ring({n}, {k}")];
                 if let Some(w) = w {
-                    base.push_str(&format!(", w={}", fmt_weight(w)));
+                    parts.push(fmt_weight(w));
                 }
-                if let Some(val) = val {
-                    base.push_str(&format!(", val={}", fmt_weight(val)));
-                }
-                vec![format!("{base})")]
+                vec![format!("{})", parts.join(", "))]
             }
             _ => {
                 let d = if *directed { 1 } else { 0 };
                 let c = if *connected { 1 } else { 0 };
-                let mut base = format!("{name} = graph({n}, {m}, {d}, {c}");
+                let mut parts = vec![format!("{name} = graph({n}, {m}, {d}, {c}")];
+                if let Some(w) = w {
+                    parts.push(fmt_weight(w));
+                }
+                if *multi {
+                    parts.push("multi=1".to_string());
+                }
+                if *loop_ {
+                    parts.push("loop=1".to_string());
+                }
                 if *gtype != GraphType::General {
                     let t = match gtype {
                         GraphType::Dag => "dag",
                         GraphType::Bipartite => "bipartite",
                         _ => unreachable!(),
                     };
-                    base.push_str(&format!(", type=\"{t}\""));
+                    parts.push(format!("type=\"{t}\""));
                 }
-                if let Some(w) = w {
-                    base.push_str(&format!(", w={}", fmt_weight(w)));
-                }
-                if let Some(val) = val {
-                    base.push_str(&format!(", val={}", fmt_weight(val)));
-                }
-                vec![format!("{base})")]
+                vec![format!("{})", parts.join(", "))]
             }
         },
     };

@@ -21,18 +21,20 @@ pub const TOP_COMMANDS: &[&str] = &[
     "tree", "graph", "ring", "base_ring",
 ];
 
+/// 行块关键字。
+pub const LINE_KEYWORD: &str = "line";
+
 /// 行内项类型关键字。
-pub const LINE_ITEM_KINDS: &[&str] = &["整数", "浮点", "文本", "表达式", "字符串"];
+pub const LINE_ITEM_KINDS: &[&str] = &["int", "float", "text", "expr", "str"];
 
 /// 已废弃但保留字（顶层写这些会报错引导）。
-pub const RETIRED_COMMANDS: &[&str] = &["int", "float", "str", "strs"];
+pub const RETIRED_COMMANDS: &[&str] = &["int", "float", "str"];
 
 /// 全部保留字（不可用作变量名）。
 pub const KNOWN_COMMANDS: &[&str] = &[
     "ints", "floats", "matrix", "matf", "perm", "binseq", "intervals", "points",
     "tree", "graph", "ring", "base_ring", "repeat",
-    "行", "整数", "浮点", "文本", "表达式", "字符串",
-    "int", "float", "str", "strs",
+    "line", "int", "float", "text", "expr", "str",
 ];
 
 const REPEAT_COMMENT: &str = "多测模式";
@@ -296,51 +298,77 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
         }
         "tree" => {
             arity(&pos, 1, 2)?;
+            let ttype = match kw_expr("type").as_deref() {
+                Some("star") => crate::ast::TreeType::Star,
+                Some("chain") => crate::ast::TreeType::Chain,
+                Some(t) => return Err(DslError::bare(format!("未知树类型：{t}"))),
+                _ => crate::ast::TreeType::Random,
+            };
             let mut w = None;
-            let mut val = None;
             if pos.len() == 2 {
                 w = weight_to_item(&pos[1])?;
             }
             if let Some(v) = kw_expr("w") {
                 w = weight_from_kw(&v)?;
             }
-            if let Some(v) = kw_expr("val") {
-                val = weight_from_kw(&v)?;
+            if kw.contains_key("val") {
+                return Err(DslError::bare("节点权值 val= 已移除（树/图只输出边）"));
             }
-            VarKind::Tree {
-                n: expr_text(&pos[0]),
-                w,
-                val,
-            }
+            VarKind::Tree { n: expr_text(&pos[0]), ttype, w }
         }
         "ring" => {
-            arity(&pos, 1, 1)?;
+            arity(&pos, 1, 2)?;
+            if kw.contains_key("val") {
+                return Err(DslError::bare("节点权值 val= 已移除（树/图只输出边）"));
+            }
+            let mut w = None;
+            if pos.len() == 2 {
+                w = weight_to_item(&pos[1])?;
+            }
+            if let Some(v) = kw_expr("w") {
+                w = weight_from_kw(&v)?;
+            }
             VarKind::Graph {
                 gtype: GraphType::Ring,
                 n: expr_text(&pos[0]),
                 m: expr_text(&pos[0]),
                 directed: false,
                 connected: true,
+                multi: false,
+                loop_: false,
                 k: None,
-                w: kw_expr("w").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
-                val: kw_expr("val").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
+                w,
             }
         }
         "base_ring" => {
-            arity(&pos, 2, 2)?;
+            arity(&pos, 2, 3)?;
+            if kw.contains_key("val") {
+                return Err(DslError::bare("节点权值 val= 已移除（树/图只输出边）"));
+            }
+            let mut w = None;
+            if pos.len() == 3 {
+                w = weight_to_item(&pos[2])?;
+            }
+            if let Some(v) = kw_expr("w") {
+                w = weight_from_kw(&v)?;
+            }
             VarKind::Graph {
                 gtype: GraphType::BaseRing,
                 n: expr_text(&pos[0]),
                 m: expr_text(&pos[0]),
                 directed: false,
                 connected: true,
+                multi: false,
+                loop_: false,
                 k: Some(expr_text(&pos[1])),
-                w: kw_expr("w").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
-                val: kw_expr("val").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
+                w,
             }
         }
         "graph" => {
             arity(&pos, 3, 5)?;
+            if kw.contains_key("val") {
+                return Err(DslError::bare("节点权值 val= 已移除（树/图只输出边）"));
+            }
             let gtype = match kw_expr("type").as_deref() {
                 Some("dag") => GraphType::Dag,
                 Some("bipartite") => GraphType::Bipartite,
@@ -361,16 +389,17 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
                 let c = expr_text(&pos[3]);
                 c == "1" || c.eq_ignore_ascii_case("true")
             };
+            let kw_bool = |k: &str| {
+                kw_expr(k).map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+            };
+            let multi = kw_bool("multi");
+            let loop_ = kw_bool("loop");
             let mut w = None;
-            let mut val = None;
             if pos.len() == 5 {
                 w = weight_to_item(&pos[4])?;
             }
             if let Some(v) = kw_expr("w") {
                 w = weight_from_kw(&v)?;
-            }
-            if let Some(v) = kw_expr("val") {
-                val = weight_from_kw(&v)?;
             }
             VarKind::Graph {
                 gtype,
@@ -378,9 +407,10 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
                 m: expr_text(&pos[1]),
                 directed,
                 connected,
+                multi,
+                loop_,
                 k: None,
                 w,
-                val,
             }
         }
         _ => return Err(DslError::bare(format!("未知命令：{cmd}"))),
@@ -428,11 +458,11 @@ fn parse_line_item(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
     let toks = tokenize(line).map_err(|e| e.with_line(lineno))?;
     let kind_kw = match toks.first() {
         Some(Tok::Name(k)) if LINE_ITEM_KINDS.contains(&k.as_str()) => k.as_str(),
-        Some(Tok::Name(k)) if k == "行" => {
+        Some(Tok::Name(k)) if k == LINE_KEYWORD => {
             return Err(DslError::at(lineno, "行块不能嵌套在行内"));
         }
         Some(Tok::Name(_)) => {
-            return Err(DslError::at(lineno, "行内项类型必须是 整数/浮点/文本/表达式/字符串"));
+            return Err(DslError::at(lineno, "行内项类型必须是 int / float / text / expr / str"));
         }
         _ => return Err(DslError::at(lineno, "行内项必须是「类型 名字: 参数」形式")),
     };
@@ -455,14 +485,14 @@ fn parse_line_item(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
     };
 
     let kind = match kind_kw {
-        "整数" => {
+        "int" => {
             arity(2, 2)?;
             LineItemKind::Int {
                 min: expr_text(&args[0]),
                 max: expr_text(&args[1]),
             }
         }
-        "浮点" => {
+        "float" => {
             arity(2, 3)?;
             LineItemKind::Float {
                 min: expr_text(&args[0]),
@@ -470,28 +500,28 @@ fn parse_line_item(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
                 prec: if args.len() == 3 { expr_text(&args[2]) } else { "6".to_string() },
             }
         }
-        "文本" => {
+        "text" => {
             arity(1, 1)?;
             let text = match args[0].as_slice() {
                 [Tok::Str(s)] => s.clone(),
-                _ => return Err(DslError::at(lineno, "文本项参数必须是字符串字面量（\"内容\"）")),
+                _ => return Err(DslError::at(lineno, "text 项参数必须是字符串字面量（\"内容\"）")),
             };
             if text.contains('"') || text.contains('\n') {
                 return Err(DslError::at(lineno, "文本内容不能包含双引号或换行"));
             }
             LineItemKind::Text { text }
         }
-        "表达式" => {
+        "expr" => {
             arity(1, 1)?;
             let expr = expr_text(&args[0]);
             if expr.is_empty() {
-                return Err(DslError::at(lineno, "表达式项缺少表达式"));
+                return Err(DslError::at(lineno, "expr 项缺少表达式"));
             }
             let node = crate::expr::parse_expr(&expr).map_err(|e| e.with_line(lineno))?;
             check_known_calls(&node).map_err(|e| e.with_line(lineno))?;
             LineItemKind::Scalar { expr }
         }
-        "字符串" => {
+        "str" => {
             arity(1, 2)?;
             let len = expr_text(&args[0]);
             let mut charset: Option<String> = None;
@@ -501,13 +531,13 @@ fn parse_line_item(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
                     _ => {
                         return Err(DslError::at(
                             lineno,
-                            "字符串项字符集必须是字符串字面量（\"ab\"）",
+                            "str 项字符集必须是字符串字面量（\"ab\"）",
                         ));
                     }
                 }
             }
             if len.is_empty() {
-                return Err(DslError::at(lineno, "字符串项缺少长度"));
+                return Err(DslError::at(lineno, "str 项缺少长度"));
             }
             let charset = charset.unwrap_or_else(|| DEFAULT_CHARSET.to_string());
             LineItemKind::Str { len, charset }
@@ -555,7 +585,7 @@ fn parse_line_block(
         }
         let rows_expr = expr_text(&inner);
         if rows_expr.is_empty() {
-            return Err(DslError::at(lineno, "行块行数表达式为空（行 (N):）"));
+            return Err(DslError::at(lineno, "行块行数表达式为空（line (N):）"));
         }
         let node = crate::expr::parse_expr(&rows_expr).map_err(|e| e.with_line(lineno))?;
         check_known_calls(&node).map_err(|e| e.with_line(lineno))?;
@@ -563,7 +593,7 @@ fn parse_line_block(
         p += 1; // 跳过 ')'
     }
     if !matches!(toks.get(p), Some(Tok::Op(s)) if s == ":") {
-        return Err(DslError::at(lineno, "行块必须以「行 (N):」开头"));
+        return Err(DslError::at(lineno, "行块必须以「line (N):」开头"));
     }
     if p + 1 != toks.len() {
         return Err(DslError::at(lineno, "行块声明行有多余内容"));
@@ -664,10 +694,10 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
     if RETIRED_COMMANDS.contains(&cmd) {
         return Err(DslError::at(
             lineno,
-            format!("{cmd} 已改为行内项：请放入行块（行: 块 + 缩进子项「类型 名字: 参数」）"),
+            format!("{cmd} 已改为行内项：请放入行块（line: 块 + 缩进子项「类型 名字: 参数」）"),
         ));
     }
-    if LINE_ITEM_KINDS.contains(&cmd) || cmd == "行" {
+    if LINE_ITEM_KINDS.contains(&cmd) || cmd == LINE_KEYWORD {
         return Err(DslError::at(
             lineno,
             format!("{cmd} 是行内项类型，必须缩进放在行块内"),
@@ -753,7 +783,7 @@ pub fn parse(text: &str) -> DslResult<Config> {
             ));
         }
         let toks = tokenize(raw.trim()).map_err(|e| e.with_line(i + 1))?;
-        if matches!(toks.first(), Some(Tok::Name(k)) if k == "行") {
+        if matches!(toks.first(), Some(Tok::Name(k)) if k == LINE_KEYWORD) {
             let (item, consumed) = parse_line_block(&lines, i, &mut seen)?;
             items.push(item);
             i += consumed;

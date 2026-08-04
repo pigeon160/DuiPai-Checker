@@ -38,8 +38,26 @@ export default function VariableList({
   }
   const nameTaken = (n: string) => (nameCount.get(n) ?? 0) > 1;
 
+  // 自动命名：新顶层变量取名 v1/v2/...（避开已有名）
   const addItem = () => {
-    onChangeItems([...items, makeItem(newKind)]);
+    const used = new Set<string>();
+    for (const it of items) {
+      const key = Object.keys(it.kind)[0];
+      if (key === "Line") {
+        for (const p of (it.kind as { Line: { items: { name: string }[] } }).Line.items) {
+          used.add(p.name);
+        }
+      } else {
+        used.add(it.name);
+      }
+    }
+    let n = 1;
+    let name = "v1";
+    while (used.has(name)) {
+      n += 1;
+      name = `v${n}`;
+    }
+    onChangeItems([...items, { ...makeItem(newKind), name }]);
   };
 
   const reorder = (from: number, to: number) => {
