@@ -191,6 +191,29 @@ fn err_missing_paren() {
 }
 
 #[test]
+fn err_extra_close_paren_no_panic() {
+    // 多余右括号（历史上导致 usize 下溢 panic，进而整个应用闪退）。
+    // 修复后：parse 不 panic；表达式字段含非法 `)`，由静态校验兜底报错。
+    for text in [
+        "n = int(1, 2))",
+        "n = int((1, 2))",
+        "n = int(1), 2)",
+        "n = tree(5, w=int(1, 10)))",
+        "n = int(1, ))",
+    ] {
+        // 优雅失败路径一：parse 直接报错（不带 panic）
+        if let Err(e) = parse(text) {
+            assert!(!e.message.is_empty(), "{text}");
+            continue;
+        }
+        // 优雅失败路径二：parse 通过，静态校验兜底
+        let cfg = parse(text).expect("parse ok");
+        let errs = validate(&cfg);
+        assert!(!errs.is_empty(), "{text} 应被静态校验捕获：{cfg:?}");
+    }
+}
+
+#[test]
 fn err_bad_char() {
     let e = parse("n = int(1, 2)!\nm = int(1, 2)").expect_err("should fail");
     assert_eq!(e.line, Some(1));

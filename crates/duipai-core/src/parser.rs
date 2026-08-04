@@ -49,6 +49,8 @@ fn expr_text(toks: &[Tok]) -> String {
 }
 
 /// 把括号内参数按顶层逗号切成若干子 token 列表。
+/// 括号不平衡（多余 `)`）时不panic：`depth` 不为 0 才递减，多余括号进入当前参数，
+/// 由后续 arity / 表达式语法检查给出友好错误。
 fn split_args(toks: &[Tok]) -> Vec<Vec<Tok>> {
     let mut args: Vec<Vec<Tok>> = Vec::new();
     let mut depth = 0usize;
@@ -60,7 +62,9 @@ fn split_args(toks: &[Tok]) -> Vec<Vec<Tok>> {
                 cur.push(tok.clone());
             }
             Tok::Op(s) if s == ")" => {
-                depth -= 1;
+                if depth > 0 {
+                    depth -= 1;
+                }
                 cur.push(tok.clone());
             }
             Tok::Comma if depth == 0 => {
@@ -90,7 +94,11 @@ fn split_kw_args(toks: &[Tok]) -> DslResult<(Vec<Vec<Tok>>, HashMap<String, Stri
         for (i, tok) in arg.iter().enumerate() {
             match tok {
                 Tok::Op(s) if s == "(" => depth += 1,
-                Tok::Op(s) if s == ")" => depth -= 1,
+                Tok::Op(s) if s == ")" => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
                 Tok::Op(s) if s == "=" && depth == 0 => {
                     eq_idx = Some(i);
                     break;
