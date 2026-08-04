@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{Config, ElemType, GraphType, Item, RepeatMode, VarKind, Weight};
+use crate::ast::{Config, ElemType, GraphType, Item, MultiPart, RepeatMode, VarKind, Weight};
 use crate::error::{DslError, DslResult};
 use crate::expr::{tokenize, Tok};
 
@@ -192,8 +192,8 @@ fn weight_from_kw(v: &str) -> DslResult<Option<Weight>> {
     weight_to_item(&toks)
 }
 
-/// 解析单条命令的参数为统一配置项。
-fn parse_cmd(name: &str, cmd: &str, args: &[Tok]) -> DslResult<Item> {
+/// 解析单条命令的参数为统一类型（不处理变量名）。
+fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
     let (mut pos, kw) = split_kw_args(args)?;
 
     let arity = |pos: &[Vec<Tok>], lo: usize, hi: usize| -> DslResult<()> {
@@ -415,25 +415,11 @@ fn parse_cmd(name: &str, cmd: &str, args: &[Tok]) -> DslResult<Item> {
         }
         _ => return Err(DslError::bare(format!("未知命令：{cmd}"))),
     };
-    Ok(Item {
-        name: name.to_string(),
-        kind: item,
-        line: 0, // 行号由 parse 回填
-    })
+    Ok(item)
 }
 
-/// 解析单条语句行。`seen` 累积已定义变量名。
-fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> DslResult<Item> {
-    let line = line.trim();
-    let eq = match line.find('=') {
-        Some(i) => i,
-        None => return Err(DslError::at(lineno, "语句缺少 '='")),
-    };
-    let name = line[..eq].trim();
-    let rhs = line[eq + 1..].trim();
-    if name.is_empty() {
-        return Err(DslError::at(lineno, "缺少变量名"));
-    }
+/// 校验并登记一个变量名（重复/保留字检查）。
+fn check_name(name: &str, lineno: usize, seen: &mut HashSet<String>) -> DslResult<()> {
     if !is_name(name) {
         return Err(DslError::at(lineno, format!("非法变量名：{name}")));
     }
@@ -443,23 +429,116 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
     if is_known(name) {
         return Err(DslError::at(lineno, format!("变量名不能是保留字：{name}")));
     }
-    let toks = tokenize(rhs).map_err(|e| e.with_line(lineno))?;
-    let cmd = match toks.first() {
-        Some(Tok::Name(c)) => c.clone(),
+    Ok(())
+}
+
+/// 校验一个命令调用组（name( ... ) 结构），返回命令名与内部参数。
+fn group_cmd<'a>(group: &'a [Tok], lineno: usize) -> DslResult<(&'a str, &'a [Tok])> {
+    let cmd = match group.first() {
+        Some(Tok::Name(c)) => c.as_str(),
         _ => return Err(DslError::at(lineno, "语句右侧必须是命令")),
     };
-    if !is_known(&cmd) {
+    if !is_known(cmd) {
         return Err(DslError::at(lineno, format!("未知命令：{cmd}")));
     }
-    if !matches!(toks.get(1), Some(Tok::Op(s)) if s == "(") {
+    if !matches!(group.get(1), Some(Tok::Op(s)) if s == "(") {
         return Err(DslError::at(lineno, format!("{cmd} 命令缺少左括号")));
     }
-    if !matches!(toks.last(), Some(Tok::Op(s)) if s == ")") {
+    if !matches!(group.last(), Some(Tok::Op(s)) if s == ")") {
         return Err(DslError::at(lineno, format!("{cmd} 命令缺少右括号")));
     }
-    let item = parse_cmd(name, &cmd, &toks[2..toks.len() - 1]).map_err(|e| e.with_line(lineno))?;
-    seen.insert(name.to_string());
-    Ok(Item { line: lineno, ..item })
+    Ok((cmd, &group[2..group.len() - 1]))
+}
+
+/// 解析单条语句行。`seen` 累积已定义变量名。
+///
+/// 支持单赋值（`n = int(1, 100)`）与多值行（`a, b = int(1, 100), float(0, 1)`）。
+fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> DslResult<Item> {
+    let line = line.trim();
+    let eq = match line.find('=') {
+        Some(i) => i,
+        None => return Err(DslError::at(lineno, "语句缺少 '='")),
+    };
+    let lhs = line[..eq].trim();
+    let rhs = line[eq + 1..].trim();
+    let names: Vec<&str> = lhs.split(',').map(str::trim).collect();
+    if names.is_empty() || names.iter().any(|n| n.is_empty()) {
+        return Err(DslError::at(lineno, "缺少变量名"));
+    }
+    // 语句内部重名检测（a, a = ...）
+    let mut local: HashSet<String> = HashSet::new();
+    for name in &names {
+        if !local.insert(name.to_string()) {
+            return Err(DslError::at(lineno, format!("变量名重复：{name}")));
+        }
+        check_name(name, lineno, seen)?;
+    }
+    let toks = tokenize(rhs).map_err(|e| e.with_line(lineno))?;
+    // 顶层逗号把右侧切成若干命令调用组
+    let groups = split_args(&toks);
+    let mut parsed: Vec<(String, VarKind)> = Vec::with_capacity(groups.len());
+    for group in &groups {
+        let (cmd, inner) = group_cmd(group, lineno)?;
+        let kind = parse_cmd(cmd, inner).map_err(|e| e.with_line(lineno))?;
+        parsed.push((cmd.to_string(), kind));
+    }
+
+    // 单赋值：行为与 legacy 完全一致
+    if names.len() == 1 && parsed.len() == 1 {
+        let (_, kind) = parsed.pop().unwrap();
+        seen.insert(names[0].to_string());
+        return Ok(Item {
+            name: names[0].to_string(),
+            kind,
+            line: lineno,
+        });
+    }
+
+    // 多值行：名字与命令数量必须一致
+    if names.len() != parsed.len() {
+        return Err(DslError::at(
+            lineno,
+            format!(
+                "多值行左侧 {} 个变量名与右侧 {} 个命令数量不一致",
+                names.len(),
+                parsed.len()
+            ),
+        ));
+    }
+    let mut parts = Vec::with_capacity(names.len());
+    for (name, (cmd, kind)) in names.iter().zip(parsed) {
+        let part = match kind {
+            VarKind::Int { min, max } => MultiPart {
+                name: name.to_string(),
+                kind: ElemType::Int,
+                min,
+                max,
+                prec: "6".to_string(),
+            },
+            VarKind::Float { min, max, prec } => MultiPart {
+                name: name.to_string(),
+                kind: ElemType::Float,
+                min,
+                max,
+                prec,
+            },
+            _ => {
+                return Err(DslError::at(
+                    lineno,
+                    format!("命令 {cmd} 不支持一行多值（仅支持 int / float）"),
+                ));
+            }
+        };
+        parts.push(part);
+    }
+    for name in &names {
+        seen.insert(name.to_string());
+    }
+    Ok(Item {
+        name: names.join(","),
+        kind: VarKind::Multi { parts },
+        line: lineno,
+    })
 }
 
 /// 从 DSL 文本顶部读取多测模式注释。

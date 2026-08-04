@@ -1,4 +1,4 @@
-import type { Item, VarKind, Weight, ElemType } from "../api";
+import type { Item, MultiPart, VarKind, Weight, ElemType } from "../api";
 import {
   editField,
   kindFieldValue,
@@ -100,10 +100,97 @@ function TextFields({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => v
   );
 }
 
+/** 多值行表单：每个 part 独立命名 + 类型 + 范围。 */
+function MultiForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => void }) {
+  const parts = (kind as { Multi: { parts: MultiPart[] } }).Multi.parts;
+  const setParts = (parts: MultiPart[]) =>
+    onKind({ Multi: { parts } } as unknown as VarKind);
+  return (
+    <>
+      {parts.map((p, i) => (
+        <span key={i} className="multi-part">
+          <input
+            className="name-input small-name"
+            value={p.name}
+            onChange={(e) =>
+              setParts(parts.map((q, j) => (j === i ? { ...q, name: e.target.value } : q)))
+            }
+            placeholder={`名${i + 1}`}
+            spellCheck={false}
+          />
+          <select
+            value={p.kind}
+            title={`第 ${i + 1} 个数类型`}
+            onChange={(e) =>
+              setParts(
+                parts.map((q, j) =>
+                  j === i ? { ...q, kind: e.target.value as ElemType } : q,
+                ),
+              )
+            }
+          >
+            <option value="Int">整数</option>
+            <option value="Float">浮点</option>
+          </select>
+          <input
+            className="field-input small"
+            title={`第 ${i + 1} 个数最小值`}
+            value={p.min}
+            onChange={(e) =>
+              setParts(parts.map((q, j) => (j === i ? { ...q, min: e.target.value } : q)))
+            }
+            placeholder="min"
+          />
+          <input
+            className="field-input small"
+            title={`第 ${i + 1} 个数最大值`}
+            value={p.max}
+            onChange={(e) =>
+              setParts(parts.map((q, j) => (j === i ? { ...q, max: e.target.value } : q)))
+            }
+            placeholder="max"
+          />
+          {p.kind === "Float" && (
+            <input
+              className="field-input small"
+              title={`第 ${i + 1} 个数精度`}
+              value={p.prec}
+              onChange={(e) =>
+                setParts(parts.map((q, j) => (j === i ? { ...q, prec: e.target.value } : q)))
+              }
+              placeholder="prec"
+            />
+          )}
+          <button
+            className="del-btn"
+            onClick={() => setParts(parts.filter((_, j) => j !== i))}
+            title="删除该数"
+          >
+            ✕
+          </button>
+        </span>
+      ))}
+      <button
+        onClick={() =>
+          setParts([
+            ...parts,
+            { name: "", kind: "Int", min: "1", max: "100", prec: "6" },
+          ])
+        }
+      >
+        ＋ 数
+      </button>
+    </>
+  );
+}
+
 function KindForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => void }) {
   const key = Object.keys(kind)[0];
   const k = kind as Record<string, unknown>;
 
+  if (key === "Multi") {
+    return <MultiForm kind={kind} onKind={onKind} />;
+  }
   if (key === "Array") {
     const v = k.Array as { elem_type: ElemType };
     return (

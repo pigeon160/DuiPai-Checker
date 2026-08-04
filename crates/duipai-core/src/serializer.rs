@@ -44,6 +44,27 @@ pub fn line_for(item: &Item) -> DslResult<String> {
     let name = &item.name;
     let line = match &item.kind {
         VarKind::Int { min, max } => format!("{name} = int({min}, {max})"),
+        VarKind::Multi { parts } => {
+            let lhs = parts
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rhs = parts
+                .iter()
+                .map(|p| {
+                    if p.kind == ElemType::Int {
+                        format!("int({}, {})", p.min, p.max)
+                    } else if p.prec == "6" {
+                        format!("float({}, {})", p.min, p.max)
+                    } else {
+                        format!("float({}, {}, {})", p.min, p.max, p.prec)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{lhs} = {rhs}")
+        }
         VarKind::Float { min, max, prec } => {
             if prec == "6" {
                 format!("{name} = float({min}, {max})")

@@ -158,11 +158,16 @@ pub fn duipai_start(
             ),
         });
         emit(CheckEvent::Log {
-            msg: format!("正解：{}", params.sol.label),
+            msg: format!("正解：{}", params.sol.cmd),
         });
         emit(CheckEvent::Log {
-            msg: format!("暴力：{}", params.brute.label),
+            msg: format!("暴力：{}", params.brute.cmd),
         });
+        if let Some(ext) = &params.ext {
+            emit(CheckEvent::Log {
+                msg: format!("数据：外置生成器 {}", ext.cmd),
+            });
+        }
         run_check(&params, cancel.clone(), &mut emit);
         running.store(false, Ordering::Relaxed);
     });

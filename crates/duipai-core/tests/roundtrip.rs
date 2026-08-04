@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use duipai_core::{eval_expr, parse, serialize, validate};
+use duipai_core::{eval_expr, generate, parse, serialize, validate};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -419,4 +419,58 @@ fn validate_bad_weight_range() {
     let cfg = parse("t = tree(5, w=float(9, 1))").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("最小值不能大于最大值")), "{errs:?}");
+}
+
+// --------------------------------------------------------------------------- //
+// 多值行（一行多个数，可命名）
+// --------------------------------------------------------------------------- //
+
+#[test]
+fn multi_roundtrip() {
+    let text = "a, b = int(1, 100), float(0, 1)\nn, m = int(1, 5), int(1, 5)\n";
+    let cfg = parse(text).expect("parse");
+    assert_eq!(cfg.items.len(), 2);
+    let out = serialize(&cfg).expect("serialize");
+    assert_eq!(out, "a, b = int(1, 100), float(0, 1)\nn, m = int(1, 5), int(1, 5)");
+    let cfg2 = parse(&out).expect("re-parse");
+    assert_eq!(cfg, cfg2);
+}
+
+#[test]
+fn multi_count_mismatch() {
+    let e = parse("a, b = int(1, 2)\n").expect_err("2 names 1 cmd");
+    assert!(e.message.contains("数量不一致"), "{e}");
+    let e = parse("a = int(1, 2), int(3, 4)\n").expect_err("1 name 2 cmds");
+    assert!(e.message.contains("数量不一致"), "{e}");
+}
+
+#[test]
+fn multi_rejects_compound_kind() {
+    let e = parse("a, b = int(1, 2), tree(5)\n").expect_err("tree not allowed");
+    assert!(e.message.contains("不支持一行多值"), "{e}");
+}
+
+#[test]
+fn multi_duplicate_part_name() {
+    let e = parse("a, a = int(1, 2), int(3, 4)\n").expect_err("dup");
+    assert!(e.message.contains("变量名重复"), "{e}");
+}
+
+#[test]
+fn multi_generate_one_line() {
+    let cfg = parse("a, b = int(5, 5), float(1, 1)\nc = int(b, a)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(0)).unwrap();
+    assert_eq!(lines[0], "5 1", "一行输出 a b：{lines:?}");
+    let c: i64 = lines[1].parse().unwrap();
+    assert!((1..=5).contains(&c), "c 引用 a、b 成功（b 取整 1，a=5）：{lines:?}");
+}
+
+#[test]
+fn multi_refs_allowed() {
+    // 多值行 part 名可被后续引用
+    let cfg = parse("n, m = int(1, 10), int(1, 10)\nx = ints(n, 1, m)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
 }

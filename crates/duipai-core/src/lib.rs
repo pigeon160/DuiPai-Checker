@@ -12,7 +12,7 @@ pub mod runner;
 pub mod serializer;
 pub mod validate;
 
-pub use ast::{Config, ElemType, GraphType, Item, RepeatMode, VarKind, Weight};
+pub use ast::{Config, ElemType, GraphType, Item, MultiPart, RepeatMode, VarKind, Weight};
 pub use check::{
     finish_summary, run_check, CheckEvent, CheckParams, CheckStats, GenMode, ProgMode,
     ProgramSpec,

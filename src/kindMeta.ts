@@ -8,6 +8,17 @@ export const KIND_ORDER: { kind: VarKind; label: string }[] = [
   { kind: { Float: { min: "0", max: "1", prec: "6" } }, label: "浮点变量" },
   {
     kind: {
+      Multi: {
+        parts: [
+          { name: "a", kind: "Int", min: "1", max: "100", prec: "6" },
+          { name: "b", kind: "Int", min: "1", max: "100", prec: "6" },
+        ],
+      },
+    },
+    label: "多值行（一行多个数）",
+  },
+  {
+    kind: {
       Array: {
         elem_type: "Int",
         el_min: "1",
@@ -38,6 +49,7 @@ export function kindLabel(kind: VarKind): string {
   switch (key) {
     case "Int": return "整数变量";
     case "Float": return "浮点变量";
+    case "Multi": return "多值行";
     case "Array": return (k.Array as { elem_type: ElemType }).elem_type === "Int" ? "整数数组" : "浮点数组";
     case "Perm": return "排列";
     case "String": return "字符串";

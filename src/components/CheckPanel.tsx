@@ -105,6 +105,7 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
   genModeRef.current = genMode;
 
   useEffect(() => {
+    let cancelled = false;
     let unlisten: UnlistenFn | null = null;
     listen<CheckEvent>("check://event", (ev) => {
       const e = ev.payload;
@@ -124,9 +125,12 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
         ]);
       }
     }).then((u) => {
-      unlisten = u;
+      // StrictMode 双挂载竞态：若清理已先执行，立即解绑刚注册的监听器
+      if (cancelled) u();
+      else unlisten = u;
     });
     return () => {
+      cancelled = true;
       unlisten?.();
     };
   }, []);

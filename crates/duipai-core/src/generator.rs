@@ -41,6 +41,9 @@ impl GenCtx<'_> {
     }
 
     fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
+        if lo == hi {
+            return lo;
+        }
         self.rng.random_range(lo..hi)
     }
 
@@ -234,6 +237,35 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
             let value = ctx.int(lo, hi);
             lines.push(value.to_string());
             ctx.env.insert(name.clone(), value as f64);
+        }
+        VarKind::Multi { parts } => {
+            let mut row = Vec::with_capacity(parts.len());
+            for p in parts {
+                if p.kind == ElemType::Int {
+                    let lo = ctx.ev(&p.min, "整数变量范围")? as i64;
+                    let hi = ctx.ev(&p.max, "整数变量范围")? as i64;
+                    if lo > hi {
+                        return Err(DslError::bare("整数变量范围最小值不能大于最大值"));
+                    }
+                    let value = ctx.int(lo, hi);
+                    row.push(value.to_string());
+                    ctx.env.insert(p.name.clone(), value as f64);
+                } else {
+                    let lo = ctx.ev(&p.min, "浮点数变量范围")?;
+                    let hi = ctx.ev(&p.max, "浮点数变量范围")?;
+                    if lo > hi {
+                        return Err(DslError::bare("浮点数变量范围最小值不能大于最大值"));
+                    }
+                    let prec = ctx.ev(&p.prec, "浮点精度")? as i64;
+                    if !(0..=15).contains(&prec) {
+                        return Err(DslError::bare("浮点数变量精度应在 0~15 之间"));
+                    }
+                    let value = ctx.uniform(lo, hi);
+                    row.push(format_float(value, prec));
+                    ctx.env.insert(p.name.clone(), value);
+                }
+            }
+            lines.push(row.join(" "));
         }
         VarKind::Float { min, max, prec } => {
             let lo = ctx.ev(min, "浮点数变量范围")?;

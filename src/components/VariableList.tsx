@@ -80,7 +80,7 @@ export default function VariableList({
 
       {items.map((item, i) => (
         <VariableRow
-          key={`${item.name}-${i}`}
+          key={i}
           item={item}
           index={i}
           dragging={overIndex === i}
