@@ -688,6 +688,7 @@ version = "0.1.0"
 dependencies = [
  "rand",
  "serde",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

@@ -7,3 +7,6 @@ description = "对拍 DSL 核心库：解析、序列化、表达式求值（纯
 [dependencies]
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_System_ProcessStatus"] }

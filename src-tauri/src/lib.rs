@@ -13,6 +13,7 @@ pub fn run() {
             commands::expr_eval,
             commands::generate_data,
             commands::save_text_file,
+            commands::read_text_file,
             commands::compile_program,
             commands::run_program_ipc,
             commands::duipai_start,

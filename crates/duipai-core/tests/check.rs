@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use duipai_core::{
-    parse, run_check, CheckEvent, CheckParams, CheckStats, ProgMode, ProgramSpec,
+    parse, run_check, CheckEvent, CheckParams, CheckStats, GenMode, ProgMode, ProgramSpec,
 };
 
 /// chdir 测试串行锁（save_fail 写当前工作目录）。
@@ -33,8 +33,11 @@ fn params(sol: &str, brute: &str, total: i64) -> CheckParams {
     CheckParams {
         sol,
         brute,
+        gen_mode: GenMode::Builtin,
+        ext: None,
         total,
         timeout: 10.0,
+        memory_limit_mb: None,
         seed: Some(1),
         ignore_ws: false,
         compiler: "g++".into(),
@@ -173,8 +176,11 @@ fn check_compilation_error_reported() {
             label: "正解".into(),
         },
         brute,
+        gen_mode: GenMode::Builtin,
+        ext: None,
         total: 1,
         timeout: 10.0,
+        memory_limit_mb: None,
         seed: Some(1),
         ignore_ws: false,
         compiler: "g++".into(),
@@ -192,4 +198,79 @@ fn check_compilation_error_reported() {
         })
         .collect();
     assert!(logs.iter().any(|m| m.contains("编译")), "{logs:?}");
+}
+
+#[test]
+fn check_external_generator() {
+    // 外置生成器：stdout 即测试数据；正解/暴力 echo stdin -> PASS
+    let (sol, brute) = specs(ECHO, ECHO);
+    let cfg = parse("").unwrap();
+    let p = CheckParams {
+        sol,
+        brute,
+        gen_mode: GenMode::External,
+        ext: Some(ProgramSpec {
+            mode: ProgMode::RunCmd,
+            cmd: "cmd /C echo 5".into(),
+            dir: String::new(),
+            label: "外置生成器".into(),
+        }),
+        total: 3,
+        timeout: 10.0,
+        memory_limit_mb: None,
+        seed: Some(1),
+        ignore_ws: false,
+        compiler: "g++".into(),
+        compile_flags: "-O2".into(),
+        config: cfg,
+    };
+    let (events, stats, tmp) = collect(p);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert_eq!(stats.pass, 3, "events={events:?}");
+    // 测试数据 = "5\n"（echo 输出）
+    let logs: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            CheckEvent::Log { msg } => Some(msg.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(logs.iter().any(|m| m.contains("PASS")), "{logs:?}");
+}
+
+#[test]
+fn check_external_generator_fails() {
+    // 外置生成器返回码非 0 -> 数据生成失败中止
+    let (sol, brute) = specs(ECHO, ECHO);
+    let p = CheckParams {
+        sol,
+        brute,
+        gen_mode: GenMode::External,
+        ext: Some(ProgramSpec {
+            mode: ProgMode::RunCmd,
+            cmd: "cmd /C exit /b 3".into(),
+            dir: String::new(),
+            label: "外置生成器".into(),
+        }),
+        total: 3,
+        timeout: 10.0,
+        memory_limit_mb: None,
+        seed: None,
+        ignore_ws: false,
+        compiler: "g++".into(),
+        compile_flags: "-O2".into(),
+        config: parse("").unwrap(),
+    };
+    let (events, stats, tmp) = collect(p);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert_eq!(stats.error, 1, "events={events:?}");
+    assert_eq!(stats.tested, 1);
+    let logs: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            CheckEvent::Log { msg } => Some(msg.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(logs.iter().any(|m| m.contains("外置生成器返回码 3")), "{logs:?}");
 }

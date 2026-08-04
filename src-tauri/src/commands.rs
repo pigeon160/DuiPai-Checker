@@ -95,6 +95,12 @@ pub fn save_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// 读取文本文件（源码预览）。
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 /// 编译 C++ 源码。
 #[tauri::command]
 pub fn compile_program(
@@ -114,8 +120,9 @@ pub fn run_program_ipc(
     dir: String,
     input: String,
     timeout: f64,
+    memory_limit_mb: Option<u64>,
 ) -> Result<duipai_core::RunResult, String> {
-    let r = duipai_core::run_program(&cmd, &dir, input.as_bytes(), timeout);
+    let r = duipai_core::run_program_ex(&cmd, &dir, input.as_bytes(), timeout, memory_limit_mb);
     Ok(r)
 }
 

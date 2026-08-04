@@ -13,11 +13,17 @@ pub mod serializer;
 pub mod validate;
 
 pub use ast::{Config, ElemType, GraphType, Item, RepeatMode, VarKind, Weight};
-pub use check::{finish_summary, run_check, CheckEvent, CheckParams, CheckStats, ProgMode, ProgramSpec};
+pub use check::{
+    finish_summary, run_check, CheckEvent, CheckParams, CheckStats, GenMode, ProgMode,
+    ProgramSpec,
+};
 pub use error::{DslError, DslResult};
 pub use expr::{collect_names, eval_expr, parse_expr, tokenize, ExprNode, Tok};
 pub use generator::{format_float, generate};
 pub use parser::{parse, KNOWN_COMMANDS};
-pub use runner::{compare, compile_cpp, normalize, parse_command, run_program, RunResult, RunStatus};
+pub use runner::{
+    compare, compile_cpp, normalize, parse_command, run_argv, run_argv_ex, run_program,
+    run_program_ex, RunResult, RunStatus,
+};
 pub use serializer::serialize;
 pub use validate::validate;

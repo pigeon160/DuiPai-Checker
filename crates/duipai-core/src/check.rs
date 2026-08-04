@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::ast::Config;
 use crate::error::DslResult;
 use crate::generator::generate_with;
-use crate::runner::{compile_cpp, compare, run_program, RunStatus};
+use crate::runner::{compile_cpp, compare, parse_command, run_argv_ex, run_program_ex, RunStatus};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -21,6 +21,13 @@ use rand::SeedableRng;
 pub enum ProgMode {
     RunCmd,
     CppSource,
+}
+
+/// 数据来源：内置生成器（DSL）/ 外置生成器（程序 stdout 即测试数据）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GenMode {
+    Builtin,
+    External,
 }
 
 /// 单个程序配置。
@@ -37,10 +44,16 @@ pub struct ProgramSpec {
 pub struct CheckParams {
     pub sol: ProgramSpec,
     pub brute: ProgramSpec,
+    /// 数据来源
+    pub gen_mode: GenMode,
+    /// 外置生成器（gen_mode == External 时使用）
+    pub ext: Option<ProgramSpec>,
     /// 组数；-1 表示无限。
     pub total: i64,
     /// 单程序超时（秒）。
     pub timeout: f64,
+    /// 单程序内存限制（MB）；None 表示不限。
+    pub memory_limit_mb: Option<u64>,
     pub seed: Option<u64>,
     pub ignore_ws: bool,
     pub compiler: String,
@@ -55,6 +68,8 @@ pub struct CheckStats {
     pub wa: u64,
     pub tle: u64,
     pub re: u64,
+    /// 内存超限
+    pub mle: u64,
     pub error: u64,
     pub tested: u64,
 }
@@ -212,6 +227,22 @@ pub fn run_check(
             return;
         }
     };
+    // 外置生成器：同样先编译（C++ 源码模式）
+    let ext_ready = if params.gen_mode == GenMode::External {
+        let ext = params.ext.as_ref().expect("External 模式必须有 ext 配置");
+        match prepare(ext, work.tmp.to_str().unwrap_or("."), "gen", &params.compiler, &params.compile_flags) {
+            Ok(x) => Some(x),
+            Err(e) => {
+                emit(CheckEvent::Log { msg: format!("[编译] 外置生成器 失败：{e}") });
+                stats.error += 1;
+                reason = "编译失败".to_string();
+                emit(CheckEvent::Finish { stats, tested: 0, reason, fail_dir });
+                return;
+            }
+        }
+    } else {
+        None
+    };
 
     let mut rng = match params.seed {
         Some(s) => StdRng::seed_from_u64(s),
@@ -224,18 +255,56 @@ pub fn run_check(
         let n = tested;
 
         // 1) 生成输入
-        let input_lines = match generate_with(&params.config, &mut rng) {
-            Ok(l) => l,
-            Err(e) => {
-                stats.error += 1;
-                emit(CheckEvent::Log { msg: format!("第 {n} 组：数据生成失败：{e}") });
-                reason = "因出错中止".to_string();
-                break;
+        let input_bytes: Vec<u8> = match &params.gen_mode {
+            GenMode::Builtin => match generate_with(&params.config, &mut rng) {
+                Ok(l) => (l.join("\n") + "\n").into_bytes(),
+                Err(e) => {
+                    stats.error += 1;
+                    emit(CheckEvent::Log { msg: format!("第 {n} 组：数据生成失败：{e}") });
+                    reason = "因出错中止".to_string();
+                    break;
+                }
+            },
+            GenMode::External => {
+                let (ext_cmd, ext_dir) = ext_ready.as_ref().expect("ext_ready");
+                // legacy：设置种子时给外置生成器追加 --seed <seed>
+                let mut args = parse_command(ext_cmd);
+                if args.is_empty() {
+                    stats.error += 1;
+                    emit(CheckEvent::Log { msg: format!("第 {n} 组：外置生成器命令为空") });
+                    reason = "因出错中止".to_string();
+                    break;
+                }
+                if let Some(s) = params.seed {
+                    args.push("--seed".to_string());
+                    args.push(s.to_string());
+                }
+                let prog = args[0].clone();
+                let r = run_argv_ex(args, ext_dir, b"", timeout, params.memory_limit_mb);
+                if r.status == RunStatus::Timeout {
+                    stats.error += 1;
+                    emit(CheckEvent::Log { msg: format!("第 {n} 组：外置生成器超时（>{timeout}s）") });
+                    reason = "因出错中止".to_string();
+                    break;
+                }
+                if r.status == RunStatus::Error {
+                    stats.error += 1;
+                    emit(CheckEvent::Log { msg: format!("第 {n} 组：找不到外置生成器：{prog}") });
+                    reason = "因出错中止".to_string();
+                    break;
+                }
+                if r.returncode != Some(0) {
+                    let msg = String::from_utf8_lossy(&r.stderr);
+                    let snippet: String = msg.chars().take(200).collect();
+                    stats.error += 1;
+                    emit(CheckEvent::Log { msg: format!("第 {n} 组：外置生成器返回码 {}：{}", r.returncode.unwrap_or(-1), snippet) });
+                    reason = "因出错中止".to_string();
+                    break;
+                }
+                r.stdout
             }
         };
-        let input_text = input_lines.join("\n") + "\n";
-        let input_bytes = input_text.as_bytes();
-        if std::fs::write(work.path("test.in"), input_bytes).is_err() {
+        if std::fs::write(work.path("test.in"), &input_bytes).is_err() {
             stats.error += 1;
             emit(CheckEvent::Log { msg: format!("第 {n} 组：写入 test.in 失败") });
             reason = "因出错中止".to_string();
@@ -243,7 +312,14 @@ pub fn run_check(
         }
 
         // 2) 跑正解
-        let r1 = run_program(&sol_run, &sol_dir, input_bytes, timeout);
+        let r1 = run_program_ex(&sol_run, &sol_dir, &input_bytes, timeout, params.memory_limit_mb);
+        if r1.status == RunStatus::Memory {
+            stats.mle += 1;
+            emit(CheckEvent::Log { msg: format!("第 {n} 组：正解 内存超限（峰值 {:.1}MB > {}MB）", r1.peak_bytes as f64 / 1048576.0, params.memory_limit_mb.unwrap_or(0)) });
+            fail_dir = save_fail(&work, emit);
+            reason = "因出错中止".to_string();
+            break;
+        }
         if r1.status == RunStatus::Timeout {
             stats.tle += 1;
             emit(CheckEvent::Log { msg: format!("第 {n} 组：正解 超时（TLE，>{timeout}s）") });
@@ -267,7 +343,14 @@ pub fn run_check(
         }
 
         // 3) 跑暴力
-        let r2 = run_program(&brute_run, &brute_dir, input_bytes, timeout);
+        let r2 = run_program_ex(&brute_run, &brute_dir, &input_bytes, timeout, params.memory_limit_mb);
+        if r2.status == RunStatus::Memory {
+            stats.mle += 1;
+            emit(CheckEvent::Log { msg: format!("第 {n} 组：暴力 内存超限（峰值 {:.1}MB > {}MB）", r2.peak_bytes as f64 / 1048576.0, params.memory_limit_mb.unwrap_or(0)) });
+            fail_dir = save_fail(&work, emit);
+            reason = "因出错中止".to_string();
+            break;
+        }
         if r2.status == RunStatus::Timeout {
             stats.tle += 1;
             emit(CheckEvent::Log { msg: format!("第 {n} 组：暴力 超时（TLE，>{timeout}s）") });
@@ -328,7 +411,7 @@ pub fn run_check(
 pub fn finish_summary(stats: &CheckStats) -> String {
     let errs = stats.re + stats.error;
     format!(
-        "  通过：{}    不一致(WA)：{}    超时(TLE)：{}    运行错误(RE/Error)：{}",
-        stats.pass, stats.wa, stats.tle, errs
+        "  通过：{}    不一致(WA)：{}    超时(TLE)：{}    内存超限(MLE)：{}    运行错误(RE/Error)：{}",
+        stats.pass, stats.wa, stats.tle, stats.mle, errs
     )
 }

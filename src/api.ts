@@ -115,6 +115,11 @@ export function saveTextFile(path: string, content: string): Promise<void> {
   return invoke<void>("save_text_file", { path, content });
 }
 
+/** 读取文本文件（源码预览）。 */
+export function readTextFile(path: string): Promise<string> {
+  return invoke<string>("read_text_file", { path });
+}
+
 /** 编译 C++ 源码。 */
 export function compileProgram(
   source: string,
@@ -126,7 +131,7 @@ export function compileProgram(
   return invoke<string>("compile_program", { source, workdir, name, compiler, flags });
 }
 
-export type RunStatus = "Ok" | "Timeout" | "Error";
+export type RunStatus = "Ok" | "Timeout" | "Memory" | "Error";
 
 export interface RunResult {
   status: RunStatus;
@@ -135,6 +140,7 @@ export interface RunResult {
   stderr: number[];
   error: string;
   elapsed: number;
+  peak_bytes: number;
 }
 
 export function runProgramIpc(
@@ -142,8 +148,15 @@ export function runProgramIpc(
   dir: string,
   input: string,
   timeout: number,
+  memoryLimitMb: number | null = null,
 ): Promise<RunResult> {
-  return invoke<RunResult>("run_program_ipc", { cmd, dir, input, timeout });
+  return invoke<RunResult>("run_program_ipc", {
+    cmd,
+    dir,
+    input,
+    timeout,
+    memoryLimitMb,
+  });
 }
 
 export type ProgMode = "RunCmd" | "CppSource";
@@ -155,11 +168,16 @@ export interface ProgramSpec {
   label: string;
 }
 
+export type GenMode = "Builtin" | "External";
+
 export interface CheckParams {
   sol: ProgramSpec;
   brute: ProgramSpec;
+  gen_mode: GenMode;
+  ext: ProgramSpec | null;
   total: number;
   timeout: number;
+  memory_limit_mb: number | null;
   seed: number | null;
   ignore_ws: boolean;
   compiler: string;
@@ -172,6 +190,7 @@ export interface CheckStats {
   wa: number;
   tle: number;
   re: number;
+  mle: number;
   error: number;
   tested: number;
 }

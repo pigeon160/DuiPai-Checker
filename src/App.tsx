@@ -6,7 +6,9 @@ import {
   ping,
   type Config,
   type DslError,
+  type GenMode,
   type Item,
+  type ProgramSpec,
 } from "./api";
 import { registerDslLanguage } from "./dslLanguage";
 import DslEditor from "./components/DslEditor";
@@ -32,6 +34,13 @@ export default function App() {
   const [errors, setErrors] = useState<DslError[]>([]);
   const [editorFocused, setEditorFocused] = useState(false);
   const [ready, setReady] = useState(false);
+  const [genMode, setGenMode] = useState<GenMode>("Builtin");
+  const [ext, setExt] = useState<ProgramSpec>({
+    mode: "RunCmd",
+    cmd: "",
+    dir: "",
+    label: "外置生成器",
+  });
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -177,14 +186,20 @@ export default function App() {
           <div className="panel-head">
             <h2>数据生成预览</h2>
           </div>
-          <GeneratePanel config={buildConfig()} />
+          <GeneratePanel config={buildConfig()} genMode={genMode} ext={genMode === "External" ? ext : null} />
         </section>
 
         <section className="panel check">
           <div className="panel-head">
             <h2>对拍</h2>
           </div>
-          <CheckPanel config={buildConfig()} />
+          <CheckPanel
+            config={buildConfig()}
+            genMode={genMode}
+            ext={ext}
+            onGenMode={setGenMode}
+            onExt={setExt}
+          />
         </section>
       </main>
     </div>

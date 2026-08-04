@@ -1,6 +1,8 @@
 //! 进程运行与比较测试。
 
-use duipai_core::{compare, normalize, parse_command, run_program, RunStatus};
+use duipai_core::{
+    compare, normalize, parse_command, run_program, run_program_ex, RunStatus,
+};
 
 #[test]
 fn parse_command_basics() {
@@ -80,4 +82,21 @@ fn stderr_captured() {
     let r = run_program("cmd /C echo err 1>&2", "", b"", 5.0);
     let err = String::from_utf8_lossy(&r.stderr);
     assert!(err.contains("err"), "{err}");
+}
+
+#[test]
+fn peak_memory_reported() {
+    let r = run_program("cmd /C echo hi", "", b"", 5.0);
+    assert!(r.peak_bytes > 0, "应能观测到峰值内存：{r:?}");
+}
+
+#[test]
+fn memory_limit_kills() {
+    // 分配 200MB 并等待 5 秒，限制 50MB -> 应被杀并报 Memory
+    let cmd = "powershell -NoProfile -Command \"$a = New-Object byte[] 200MB; Start-Sleep 5\"";
+    let start = std::time::Instant::now();
+    let r = run_program_ex(cmd, "", b"", 15.0, Some(50));
+    assert_eq!(r.status, RunStatus::Memory, "{r:?}");
+    assert!(r.peak_bytes >= 50 * 1024 * 1024, "峰值应达到限制：{r:?}");
+    assert!(start.elapsed().as_secs_f64() < 10.0, "内存超限应快速终止");
 }
