@@ -98,7 +98,7 @@ main.split {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 6px 12px;
   background: #e8eaee;
   border-bottom: 1px solid #d0d3d9;
   flex: 0 0 auto;
@@ -155,12 +155,12 @@ main.split {
 .var-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 11px 12px;
-  margin-bottom: 9px;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
   background: #fff;
   border: 1px solid #d0d3d9;
-  border-radius: 7px;
+  border-radius: 6px;
   flex-wrap: wrap;
 }
 
@@ -193,9 +193,9 @@ main.split {
 input,
 select {
   font-size: 13px;
-  padding: 7px 10px;
+  padding: 3px 6px;
   border: 1px solid #c9ccd1;
-  border-radius: 5px;
+  border-radius: 4px;
   background: #fff;
   color: #1f2328;
   box-sizing: border-box;
@@ -206,7 +206,7 @@ select {
 }
 
 .field-input.small {
-  width: 64px;
+  width: 60px;
 }
 
 .name-input {
@@ -220,11 +220,11 @@ select {
 .weight-group {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   background: #f6f8fa;
   border: 1px dashed #c9ccd1;
-  border-radius: 5px;
-  padding: 4px 8px;
+  border-radius: 4px;
+  padding: 2px 6px;
 }
 
 .wg-label {
@@ -236,14 +236,14 @@ select {
   border: none;
   background: none;
   color: #cf222e;
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
-  padding: 3px 8px;
+  padding: 2px 6px;
 }
 
 .del-btn:hover {
   background: #ffebe9;
-  border-radius: 5px;
+  border-radius: 4px;
 }
 
 /* ---------------- DSL 编辑器 ---------------- */
@@ -271,7 +271,7 @@ select {
 }
 
 button {
-  padding: 7px 14px;
+  padding: 4px 12px;
   border: 1px solid #c9ccd1;
   border-radius: 6px;
   background: #fff;
@@ -435,10 +435,10 @@ button:hover {
   background: #0d1117;
   color: #c9d1d9;
   border-radius: 6px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   font-family: Consolas, "Courier New", monospace;
   font-size: 12px;
-  line-height: 1.75;
+  line-height: 1.5;
 }
 
 .log-line {

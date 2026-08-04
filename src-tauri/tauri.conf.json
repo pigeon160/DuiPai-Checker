@@ -14,9 +14,9 @@
       {
         "title": "对拍检查器",
         "width": 1600,
-        "height": 920,
+        "height": 1080,
         "minWidth": 1100,
-        "minHeight": 700
+        "minHeight": 800
       }
     ],
     "security": {
