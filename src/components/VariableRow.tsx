@@ -26,6 +26,8 @@ interface Props {
   onKind: (kind: VarKind) => void;
   onDelete: () => void;
   nameTaken?: (n: string) => boolean;
+  /** 全部已用名字（自动命名去重用） */
+  usedNames?: Set<string>;
   dragProps: {
     onDragStart: (e: React.DragEvent) => void;
     onDragOver: (e: React.DragEvent) => void;
@@ -352,9 +354,11 @@ function splitPresets(charset: string): [
 function LineHeadControls({
   kind,
   onKind,
+  usedNames,
 }: {
   kind: VarKind;
   onKind: (k: VarKind) => void;
+  usedNames?: Set<string>;
 }) {
   const { rows, items } = (kind as { Line: { rows: string; items: LineItem[] } }).Line;
   const [rowsError, setRowsError] = useState<string | null>(null);
@@ -387,11 +391,12 @@ function LineHeadControls({
     };
   }, [rows]);
 
-  // 自动命名：新行内项取名 v1/v2/...（避开已有名）
-  const used = new Set(items.map((it) => it.name).filter(Boolean));
+  // 自动命名：新行内项取名 v1/v2/...（避开全部已用名字，含其他行）
   const nextName = () => {
     let i = 1;
-    while (used.has(`v${i}`)) i += 1;
+    while ((usedNames?.has(`v${i}`) ?? false) || items.some((it) => it.name === `v${i}`)) {
+      i += 1;
+    }
     return `v${i}`;
   };
 
@@ -602,6 +607,7 @@ export default function VariableRow({
   onKind,
   onDelete,
   nameTaken,
+  usedNames,
   dragProps,
 }: Props) {
   const kindKey = Object.keys(item.kind)[0];
@@ -622,7 +628,7 @@ export default function VariableRow({
             <span className="kind-badge" style={{ background: badge.bg, color: badge.fg }}>
               {kindLabel(item.kind)}
             </span>
-            <LineHeadControls kind={item.kind} onKind={onKind} />
+            <LineHeadControls kind={item.kind} onKind={onKind} usedNames={usedNames} />
             <button className="del-btn" onClick={onDelete} title="删除变量">✕</button>
           </div>
           <LineItems kind={item.kind} onKind={onKind} nameTaken={nameTaken} />

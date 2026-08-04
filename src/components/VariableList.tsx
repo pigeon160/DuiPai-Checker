@@ -37,6 +37,8 @@ export default function VariableList({
     }
   }
   const nameTaken = (n: string) => (nameCount.get(n) ?? 0) > 1;
+  // 全部已用名字（自动命名去重用）
+  const usedNames = new Set([...nameCount.keys()].filter((n) => n !== ""));
 
   // 自动命名：新顶层变量取名 v1/v2/...（避开已有名）
   const addItem = () => {
@@ -106,9 +108,10 @@ export default function VariableList({
       {items.map((item, i) => (
         <VariableRow
           key={i}
-          item={item}
           index={i}
+          item={item}
           dragging={overIndex === i}
+          usedNames={usedNames}
           onName={(name) => {
             const next = [...items];
             next[i] = { ...item, name };
