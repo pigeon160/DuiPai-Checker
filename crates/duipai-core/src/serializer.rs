@@ -44,11 +44,14 @@ pub fn line_for(item: &Item) -> DslResult<String> {
     let name = &item.name;
     let line = match &item.kind {
         VarKind::Int { min, max } => format!("{name} = int({min}, {max})"),
-        VarKind::Multi { parts } => {
-            let assigns: Vec<String> = parts
+        VarKind::Multi { rows, parts } => {
+            let mut assigns: Vec<String> = parts
                 .iter()
                 .map(|p| format!("{} = {}", p.name, p.expr))
                 .collect();
+            if rows != "1" {
+                assigns.push(format!("repeat({rows})"));
+            }
             assigns.join(", ")
         }
         VarKind::Scalar { expr } => format!("{name} = {expr}"),

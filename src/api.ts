@@ -17,7 +17,7 @@ export interface MultiPart {
 
 export type VarKind =
   | { Int: { min: string; max: string } }
-  | { Multi: { parts: MultiPart[] } }
+  | { Multi: { rows: string; parts: MultiPart[] } }
   | { Scalar: { expr: string } }
   | { Float: { min: string; max: string; prec: string } }
   | {

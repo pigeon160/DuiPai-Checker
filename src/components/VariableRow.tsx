@@ -100,13 +100,26 @@ function TextFields({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => v
   );
 }
 
-/** 多赋值表单：每项 name + expr。 */
+/** 多赋值表单：每项 name + expr，常驻"＋ 数"与"重复 N 行"。 */
 function MultiForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => void }) {
-  const parts = (kind as { Multi: { parts: MultiPart[] } }).Multi.parts;
+  const { rows, parts } = (kind as { Multi: { rows: string; parts: MultiPart[] } }).Multi;
   const setParts = (parts: MultiPart[]) =>
-    onKind({ Multi: { parts } } as unknown as VarKind);
+    onKind({ Multi: { rows, parts } } as unknown as VarKind);
   return (
     <>
+      <span className="multi-part" title="重复输出行数（表达式，默认 1 行）">
+        <span className="wg-label">重复</span>
+        <input
+          className="field-input small"
+          value={rows}
+          onChange={(e) =>
+            onKind({ Multi: { rows: e.target.value, parts } } as unknown as VarKind)
+          }
+          placeholder="1"
+          spellCheck={false}
+        />
+        <span className="wg-label">行</span>
+      </span>
       {parts.map((p, i) => (
         <span key={i} className="multi-part">
           <input
@@ -277,11 +290,12 @@ export default function VariableRow({ item, dragging, onName, onKind, onDelete, 
   const handleNameChange = (raw: string) => {
     const names = raw.split(/\s+/).filter(Boolean);
     if (isMulti) {
+      const { rows } = (item.kind as { Multi: { rows: string; parts: MultiPart[] } }).Multi;
       if (names.length > 1) {
         const next = names.map((n, i) =>
           i < multiParts.length ? { ...multiParts[i], name: n } : { name: n, expr: multiParts[0]?.expr ?? "int(1, 100)" },
         );
-        onKind({ Multi: { parts: next } } as unknown as VarKind);
+        onKind({ Multi: { rows, parts: next } } as unknown as VarKind);
       } else if (names.length === 1) {
         onKind({ Scalar: { expr: multiParts[0]?.expr ?? "" } } as unknown as VarKind);
       }
@@ -290,7 +304,7 @@ export default function VariableRow({ item, dragging, onName, onKind, onDelete, 
     if (names.length > 1) {
       const expr = kindToExpr(item.kind);
       if (expr === null) return; // 多行类型不支持一行多值，忽略改名
-      onKind({ Multi: { parts: names.map((n) => ({ name: n, expr })) } } as unknown as VarKind);
+      onKind({ Multi: { rows: "1", parts: names.map((n) => ({ name: n, expr })) } } as unknown as VarKind);
       return;
     }
     onName(raw);

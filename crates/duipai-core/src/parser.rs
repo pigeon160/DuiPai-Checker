@@ -12,7 +12,7 @@ use crate::expr::{tokenize, Tok};
 /// 全部命令（保留字，不可用作变量名）。
 pub const KNOWN_COMMANDS: &[&str] = &[
     "int", "float", "ints", "floats", "matrix", "matf", "perm", "tree", "graph",
-    "str", "strs", "binseq", "intervals", "points", "ring", "base_ring",
+    "str", "strs", "binseq", "intervals", "points", "ring", "base_ring", "repeat",
 ];
 
 const REPEAT_COMMENT: &str = "多测模式";
@@ -465,6 +465,12 @@ fn parse_assign(rhs_toks: &[Tok], lineno: usize) -> DslResult<VarKind> {
         if is_known(cmd) && matches!(rhs_toks.get(1), Some(Tok::Op(s)) if s == "(") {
             if let Some(Tok::Op(s)) = rhs_toks.last() {
                 if s == ")" {
+                    if cmd == "repeat" {
+                        return Err(DslError::at(
+                            lineno,
+                            "repeat(N) 只能用于一行多赋值（如 n = int(1, 5), m = 2*n, repeat(3)）",
+                        ));
+                    }
                     return parse_cmd(cmd, &rhs_toks[2..rhs_toks.len() - 1])
                         .map_err(|e| e.with_line(lineno));
                 }
@@ -508,9 +514,10 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
     let line = line.trim();
     let toks = tokenize(line).map_err(|e| e.with_line(lineno))?;
 
-    // 顶层逗号切分成若干个 `name = expr` 赋值组
+    // 顶层逗号切分成若干个 `name = expr` 赋值组（最后可为 `repeat(N)` 行数标记）
     let groups = split_args(&toks);
     let mut assigns: Vec<(String, &[Tok])> = Vec::with_capacity(groups.len());
+    let mut repeat: Option<String> = None;
     for group in &groups {
         if group.is_empty() {
             return Err(DslError::at(lineno, "语句缺少 '='"));
@@ -535,7 +542,27 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
         }
         let eq = match eq_idx {
             Some(i) => i,
-            None => return Err(DslError::at(lineno, "语句缺少 '='")),
+            None => {
+                // 无 '=' 的组只允许 `repeat(N)`（多赋值行数标记）
+                if matches!(group.as_slice(), [Tok::Name(n), Tok::Op(o), .., Tok::Op(c)]
+                    if n.as_str() == "repeat" && o == "(" && c == ")")
+                {
+                    if repeat.is_some() {
+                        return Err(DslError::at(lineno, "repeat(N) 只能出现一次"));
+                    }
+                    if group.len() < 4 {
+                        return Err(DslError::at(lineno, "repeat(N) 缺少行数表达式"));
+                    }
+                    let inner = expr_text(&group[2..group.len() - 1]);
+                    if inner.is_empty() {
+                        return Err(DslError::at(lineno, "repeat(N) 缺少行数表达式"));
+                    }
+                    crate::expr::parse_expr(&inner).map_err(|e| e.with_line(lineno))?;
+                    repeat = Some(inner);
+                    continue;
+                }
+                return Err(DslError::at(lineno, "语句缺少 '='"));
+            }
         };
         let name = expr_text(&group[..eq]);
         if name.is_empty() {
@@ -553,8 +580,11 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
         }
     }
 
-    // 单赋值
+    // 单赋值（repeat 标记只在多赋值有效）
     if assigns.len() == 1 {
+        if repeat.is_some() {
+            return Err(DslError::at(lineno, "repeat(N) 只能用于一行多赋值"));
+        }
         let (name, rhs) = assigns.pop().unwrap();
         let kind = parse_assign(rhs, lineno)?;
         seen.insert(name.clone());
@@ -603,7 +633,10 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
             .map(|(n, _)| n.as_str())
             .collect::<Vec<_>>()
             .join(","),
-        kind: VarKind::Multi { parts },
+        kind: VarKind::Multi {
+            rows: repeat.unwrap_or_else(|| "1".to_string()),
+            parts,
+        },
         line: lineno,
     })
 }

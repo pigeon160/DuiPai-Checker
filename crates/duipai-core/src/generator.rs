@@ -238,14 +238,20 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
             lines.push(value.to_string());
             ctx.env.insert(name.clone(), value as f64);
         }
-        VarKind::Multi { parts } => {
-            let mut row = Vec::with_capacity(parts.len());
-            for p in parts {
-                let value = ctx.ev(&p.expr, "表达式")?;
-                row.push(format_float(value, 12));
-                ctx.env.insert(p.name.clone(), value);
+        VarKind::Multi { rows, parts } => {
+            let rows_n = ctx.ev(rows, "重复行数")? as i64;
+            if rows_n < 1 {
+                return Err(DslError::bare("重复行数不能小于 1"));
             }
-            lines.push(row.join(" "));
+            for _ in 0..rows_n {
+                let mut row = Vec::with_capacity(parts.len());
+                for p in parts {
+                    let value = ctx.ev(&p.expr, "表达式")?;
+                    row.push(format_float(value, 12));
+                    ctx.env.insert(p.name.clone(), value);
+                }
+                lines.push(row.join(" "));
+            }
         }
         VarKind::Scalar { expr } => {
             let value = ctx.ev(expr, "表达式")?;

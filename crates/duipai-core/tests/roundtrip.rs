@@ -498,3 +498,62 @@ fn scalar_float_output() {
     let lines = generate(&cfg, Some(0)).unwrap();
     assert!(lines[0].contains('.'), "浮点结果带小数：{lines:?}");
 }
+
+// --------------------------------------------------------------------------- //
+// 多赋值 repeat(N)：重复输出 N 行
+// --------------------------------------------------------------------------- //
+
+#[test]
+fn multi_repeat_roundtrip() {
+    let text = "n = int(1, 5), m = 2 * n, repeat(3)\n";
+    let cfg = parse(text).expect("parse");
+    let out = serialize(&cfg).expect("serialize");
+    assert_eq!(out, "n = int(1, 5), m = 2 * n, repeat(3)");
+    let cfg2 = parse(&out).expect("re-parse");
+    assert_eq!(cfg, cfg2);
+}
+
+#[test]
+fn multi_repeat_generate() {
+    let cfg = parse("n = int(1, 10), m = 2 * n, repeat(3)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(2)).unwrap();
+    assert_eq!(lines.len(), 3, "输出 3 行：{lines:?}");
+    for l in &lines {
+        let v: Vec<i64> = l.split_whitespace().map(|x| x.parse().unwrap()).collect();
+        assert_eq!(v.len(), 2, "{l}");
+        assert_eq!(v[1], 2 * v[0], "每行 m = 2*n：{l}");
+    }
+}
+
+#[test]
+fn multi_repeat_rows_expr() {
+    // 行数可以是表达式（引用前面变量）
+    let cfg = parse("k = int(2, 2)\nn = int(1, 5), m = 2 * n, repeat(k)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(0)).unwrap();
+    assert_eq!(lines.len(), 3, "k 一行 + 多赋值 2 行：{lines:?}");
+}
+
+#[test]
+fn multi_repeat_zero_rejected() {
+    let cfg = parse("n = int(1, 5), m = int(1, 5), repeat(0)\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("不能小于 1")), "{errs:?}");
+}
+
+#[test]
+fn multi_repeat_single_assign_rejected() {
+    let e = parse("n = int(1, 5), repeat(3)\n").expect_err("repeat on single assign");
+    assert!(e.message.contains("只能用于一行多赋值"), "{e}");
+    let e = parse("n = repeat(3)\n").expect_err("repeat alone");
+    assert!(e.message.contains("只能用于一行多赋值"), "{e}");
+}
+
+#[test]
+fn multi_repeat_duplicate_rejected() {
+    let e = parse("n = int(1, 5), m = int(1, 5), repeat(2), repeat(3)\n").expect_err("dup repeat");
+    assert!(e.message.contains("只能出现一次"), "{e}");
+}

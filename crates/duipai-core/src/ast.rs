@@ -83,8 +83,9 @@ pub struct MultiPart {
 pub enum VarKind {
     /// 整数变量：`n = int(min, max)`
     Int { min: String, max: String },
-    /// 多赋值：`n = int(1, 100), m = 2*n`——一行多个数，每项 name = expr
-    Multi { parts: Vec<MultiPart> },
+    /// 多赋值：`n = int(1, 100), m = 2*n`——一行多个数，每项 name = expr；
+    /// `repeat(N)` 时输出 N 行（每行独立随机），rows 为行数表达式（默认 "1"）
+    Multi { rows: String, parts: Vec<MultiPart> },
     /// 标量表达式绑定：`n = 2*m + 1`（任意表达式，值可被引用）
     Scalar { expr: String },
     /// 浮点变量：`x = float(min, max[, prec])`

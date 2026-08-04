@@ -118,12 +118,14 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                 check_field(max, "整数变量范围", &types, &mut errors, line);
                 check_lo_hi(min, max, "整数变量范围", "整数变量范围最小值不能大于最大值", &mut errors, line);
             }
-            VarKind::Multi { parts } => {
+            VarKind::Multi { rows, parts } => {
                 // 逐 part 检查并渐进登记名字：同一行内后者可引用前者
                 for p in parts {
                     check_field(&p.expr, "", &types, &mut errors, line);
                     types.insert(p.name.clone(), kind.clone());
                 }
+                check_field(rows, "重复行数", &types, &mut errors, line);
+                check_const(rows, "重复行数", "重复行数不能小于 1", |v| v >= 1.0, &mut errors, line);
             }
             VarKind::Scalar { expr } => {
                 check_field(expr, "", &types, &mut errors, line);
@@ -284,7 +286,7 @@ pub fn validate(config: &Config) -> Vec<DslError> {
             }
         }
         match kind {
-            VarKind::Multi { parts } => {
+            VarKind::Multi { parts, .. } => {
                 for p in parts {
                     types.insert(p.name.clone(), kind.clone());
                 }
