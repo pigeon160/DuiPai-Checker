@@ -433,6 +433,7 @@ input.invalid,
   gap: 8px;
   flex-wrap: wrap;
   min-height: 30px;
+  width: 100%;
 }
 
 .line-head .del-btn {
@@ -486,8 +487,10 @@ input.invalid,
   flex-direction: column;
   gap: 6px;
   margin-left: 26px;
+  margin-top: 6px;
   padding-left: 14px;
   border-left: 2px solid #e3e0fb;
+  width: 100%;
 }
 
 .line-items .multi-part {
@@ -496,6 +499,10 @@ input.invalid,
   gap: 5px;
   flex-wrap: wrap;
   width: 100%;
+  box-sizing: border-box;
+  background: #f8f9fb;
+  border-radius: 6px;
+  padding: 5px 8px;
 }
 
 .repeat-toggle {
