@@ -112,17 +112,21 @@ export default function GeneratePanel({ config, genMode, ext }: Props) {
             title="留空则每次随机（不可复现）"
           />
         </label>
-        <button onClick={onGenerate} disabled={loading}>
+        <button
+          className="btn-primary"
+          onClick={onGenerate}
+          disabled={loading}
+        >
           {loading
             ? "生成中…"
             : genMode === "External"
               ? "试运行外置生成器"
               : "生成样例"}
         </button>
-        <button onClick={onCopy} disabled={!output}>
+        <button className="btn-secondary" onClick={onCopy} disabled={!output}>
           复制
         </button>
-        <button onClick={onExport} disabled={!output}>
+        <button className="btn-secondary" onClick={onExport} disabled={!output}>
           导出…
         </button>
         {genMode === "External" && (

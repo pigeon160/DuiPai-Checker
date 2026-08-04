@@ -34,7 +34,8 @@ export function Panel({
       style={style}
     >
       <div className="panel-head" onClick={onToggle} title={collapsed ? "展开" : "折叠"}>
-        <span className={`chevron ${collapsed ? "closed" : ""}`}>▼</span>
+        <span className="panel-accent" />
+        <span className={`chevron ${collapsed ? "closed" : ""}`}>▸</span>
         <h2>{title}</h2>
         {actions && (
           <div className="head-actions" onClick={(e) => e.stopPropagation()}>

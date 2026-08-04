@@ -98,7 +98,7 @@ export default function VariableList({
             </option>
           ))}
         </select>
-        <button onClick={addItem}>＋ 添加变量</button>
+        <button className="btn-primary" onClick={addItem}>＋ 添加变量</button>
       </div>
 
       {items.length === 0 && <p className="empty-hint">还没有变量——点“＋ 添加变量”或直接在下方面板编辑 DSL</p>}

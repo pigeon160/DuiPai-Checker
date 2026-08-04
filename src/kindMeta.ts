@@ -60,6 +60,23 @@ export const KIND_ORDER: { kind: VarKind; label: string }[] = [
   { kind: { Graph: { gtype: "BaseRing", n: "8", m: "8", directed: false, connected: true, multi: false, loop_: false, k: "3", w: null } }, label: "基环树" },
 ];
 
+/** 类型徽标配色（淡底深字 pill）。 */
+const KIND_COLORS: Record<string, { bg: string; fg: string }> = {
+  Line: { bg: "#EDE9FE", fg: "#7C3AED" },
+  Array: { bg: "#DBEAFE", fg: "#2563EB" },
+  Perm: { bg: "#CFFAFE", fg: "#0891B2" },
+  Binseq: { bg: "#CFFAFE", fg: "#0891B2" },
+  Intervals: { bg: "#FCE7F3", fg: "#DB2777" },
+  Points: { bg: "#FCE7F3", fg: "#DB2777" },
+  Tree: { bg: "#D1FAE5", fg: "#059669" },
+  Graph: { bg: "#FFEDD5", fg: "#EA580C" },
+};
+
+/** 返回类型徽标配色（未知类型回退灰）。 */
+export function kindColor(kind: VarKind): { bg: string; fg: string } {
+  return KIND_COLORS[Object.keys(kind)[0]] ?? { bg: "#F3F4F6", fg: "#6B7280" };
+}
+
 export function kindLabel(kind: VarKind): string {
   const key = Object.keys(kind)[0];
   const k = kind as Record<string, unknown>;

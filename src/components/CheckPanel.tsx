@@ -63,11 +63,11 @@ function ProgramRow({
       />
       {spec.mode === "CppSource" && (
         <>
-          <button onClick={() => onImport(label)} title="选择 .cpp 文件并填入路径">
+          <button className="btn-secondary" onClick={() => onImport(label)} title="选择 .cpp 文件并填入路径">
             导入…
           </button>
           {spec.cmd.trim() !== "" && (
-            <button onClick={() => onPreview(spec.cmd)} title="读取源码内容预览">
+            <button className="btn-secondary" onClick={() => onPreview(spec.cmd)} title="读取源码内容预览">
               预览
             </button>
           )}
@@ -275,9 +275,9 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
       </div>
       <div className="param-row">
         {!running ? (
-          <button className="start-btn" onClick={onStart}>开始对拍</button>
+          <button className="btn-primary btn-lg" onClick={onStart}>开始对拍</button>
         ) : (
-          <button className="stop-btn" onClick={onStop}>停止</button>
+          <button className="btn-secondary btn-lg" onClick={onStop}>停止</button>
         )}
         <span className="stats-text">
           已测试 {stats.tested}

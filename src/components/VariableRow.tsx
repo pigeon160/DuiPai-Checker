@@ -6,6 +6,7 @@ import {
   CHARSET_LOWER,
   CHARSET_UPPER,
   editField,
+  kindColor,
   kindFieldValue,
   kindFields,
   kindLabel,
@@ -593,6 +594,7 @@ export default function VariableRow({
   const kindKey = Object.keys(item.kind)[0];
   const isLine = kindKey === "Line";
   const nameErr = isLine ? null : nameError(item.name, nameTaken);
+  const badge = kindColor(item.kind);
 
   return (
     <div
@@ -611,7 +613,9 @@ export default function VariableRow({
           spellCheck={false}
         />
       )}
-      <span className="kind-badge">{kindLabel(item.kind)}</span>
+      <span className="kind-badge" style={{ background: badge.bg, color: badge.fg }}>
+        {kindLabel(item.kind)}
+      </span>
       <KindForm kind={item.kind} onKind={onKind} nameTaken={nameTaken} />
       <button className="del-btn" onClick={onDelete} title="删除变量">✕</button>
     </div>
