@@ -100,3 +100,101 @@ export function exprEval(
 ): Promise<number> {
   return invoke<number>("expr_eval", { expr, env });
 }
+
+// --------------------------------------------------------------------------- //
+// Phase 3：生成与对拍
+// --------------------------------------------------------------------------- //
+
+/** 生成数据预览。seed 为 null 时随机。 */
+export function generateData(config: Config, seed: number | null): Promise<string> {
+  return invoke<string>("generate_data", { config, seed });
+}
+
+/** 导出文本到指定路径。 */
+export function saveTextFile(path: string, content: string): Promise<void> {
+  return invoke<void>("save_text_file", { path, content });
+}
+
+/** 编译 C++ 源码。 */
+export function compileProgram(
+  source: string,
+  workdir: string,
+  name: string,
+  compiler: string,
+  flags: string,
+): Promise<string> {
+  return invoke<string>("compile_program", { source, workdir, name, compiler, flags });
+}
+
+export type RunStatus = "Ok" | "Timeout" | "Error";
+
+export interface RunResult {
+  status: RunStatus;
+  returncode: number | null;
+  stdout: number[];
+  stderr: number[];
+  error: string;
+  elapsed: number;
+}
+
+export function runProgramIpc(
+  cmd: string,
+  dir: string,
+  input: string,
+  timeout: number,
+): Promise<RunResult> {
+  return invoke<RunResult>("run_program_ipc", { cmd, dir, input, timeout });
+}
+
+export type ProgMode = "RunCmd" | "CppSource";
+
+export interface ProgramSpec {
+  mode: ProgMode;
+  cmd: string;
+  dir: string;
+  label: string;
+}
+
+export interface CheckParams {
+  sol: ProgramSpec;
+  brute: ProgramSpec;
+  total: number;
+  timeout: number;
+  seed: number | null;
+  ignore_ws: boolean;
+  compiler: string;
+  compile_flags: string;
+  config: Config;
+}
+
+export interface CheckStats {
+  pass: number;
+  wa: number;
+  tle: number;
+  re: number;
+  error: number;
+  tested: number;
+}
+
+export type CheckEvent =
+  | { kind: "log"; msg: string }
+  | { kind: "status"; tested: number; total: number }
+  | {
+      kind: "finish";
+      stats: CheckStats;
+      tested: number;
+      reason: string;
+      fail_dir: string | null;
+    };
+
+export function duipaiStart(params: CheckParams): Promise<void> {
+  return invoke<void>("duipai_start", { params });
+}
+
+export function duipaiCancel(): Promise<void> {
+  return invoke<void>("duipai_cancel");
+}
+
+export function duipaiRunning(): Promise<boolean> {
+  return invoke<boolean>("duipai_running");
+}

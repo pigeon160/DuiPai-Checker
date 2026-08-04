@@ -72,11 +72,25 @@ main.split {
 }
 
 .panel.top {
-  flex: 1 1 55%;
+  flex: 1 1 30%;
+  min-height: 120px;
 }
 
-.panel.bottom {
-  flex: 1 1 45%;
+.panel.mid {
+  flex: 1 1 28%;
+  min-height: 120px;
+  border-top: 3px solid #0d1117;
+}
+
+.panel.gen {
+  flex: 0 0 auto;
+  max-height: 260px;
+  border-top: 3px solid #0d1117;
+}
+
+.panel.check {
+  flex: 1 1 34%;
+  min-height: 180px;
   border-top: 3px solid #0d1117;
 }
 
@@ -259,4 +273,167 @@ button {
 
 button:hover {
   background: #f0f1f3;
+}
+
+/* ---------------- 生成预览 ---------------- */
+
+.gen-panel {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.gen-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gen-toolbar label {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.seed-input {
+  width: 90px;
+}
+
+.stale-hint {
+  color: #9a6700;
+  font-size: 12px;
+}
+
+.gen-error {
+  color: #b42318;
+  font-size: 12px;
+}
+
+.gen-output {
+  margin: 0;
+  background: #0d1117;
+  color: #c9d1d9;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 60px;
+  max-height: 170px;
+  white-space: pre;
+}
+
+/* ---------------- 对拍 ---------------- */
+
+.check-panel {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.prog-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prog-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.prog-label {
+  width: 40px;
+  font-size: 13px;
+  color: #57606a;
+  flex: 0 0 auto;
+}
+
+.prog-cmd {
+  flex: 1 1 auto;
+  min-width: 120px;
+}
+
+.param-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.param-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.num-input {
+  width: 64px;
+}
+
+.flags-input {
+  width: 180px;
+}
+
+.ws-label {
+  white-space: nowrap;
+}
+
+.start-btn {
+  background: #1a7f37;
+  border-color: #1a7f37;
+  color: #fff;
+}
+
+.start-btn:hover {
+  background: #14692c;
+}
+
+.stop-btn {
+  background: #cf222e;
+  border-color: #cf222e;
+  color: #fff;
+}
+
+.stop-btn:hover {
+  background: #a40e26;
+}
+
+.stats-text {
+  font-size: 12px;
+  color: #444;
+}
+
+.param-error {
+  color: #b42318;
+  font-size: 12px;
+}
+
+.log-box {
+  flex: 1 1 auto;
+  min-height: 80px;
+  overflow-y: auto;
+  background: #0d1117;
+  color: #c9d1d9;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
 }

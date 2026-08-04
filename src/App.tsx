@@ -11,6 +11,8 @@ import {
 import { registerDslLanguage } from "./dslLanguage";
 import DslEditor from "./components/DslEditor";
 import VariableList from "./components/VariableList";
+import GeneratePanel from "./components/GeneratePanel";
+import CheckPanel from "./components/CheckPanel";
 
 const SAMPLE_DSL = `# 多测模式：重复 3 次
 n = int(1, 100)
@@ -111,10 +113,15 @@ export default function App() {
 
   const clean = errors.length === 0;
 
+  const buildConfig = (): Config => ({
+    repeat: repeatEnabled ? { enabled: true, count: repeatCount } : null,
+    items,
+  });
+
   return (
     <div className="app">
       <header>
-        <h1>对拍检查器 · Phase 2</h1>
+        <h1>对拍检查器</h1>
         <span className="status">{status}</span>
         <span className={`badge ${clean ? "ok" : "err"}`}>
           {clean ? "DSL 校验通过" : `${errors.length} 个错误`}
@@ -136,7 +143,7 @@ export default function App() {
           />
         </section>
 
-        <section className="panel bottom">
+        <section className="panel mid">
           <div className="panel-head">
             <h2>DSL 编辑器</h2>
             <div className="head-actions">
@@ -164,6 +171,20 @@ export default function App() {
               ))}
             </ul>
           )}
+        </section>
+
+        <section className="panel gen">
+          <div className="panel-head">
+            <h2>数据生成预览</h2>
+          </div>
+          <GeneratePanel config={buildConfig()} />
+        </section>
+
+        <section className="panel check">
+          <div className="panel-head">
+            <h2>对拍</h2>
+          </div>
+          <CheckPanel config={buildConfig()} />
         </section>
       </main>
     </div>
