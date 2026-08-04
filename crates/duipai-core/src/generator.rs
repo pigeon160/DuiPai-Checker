@@ -242,6 +242,17 @@ fn gen_line_item(ctx: &mut GenCtx, it: &crate::ast::LineItem) -> DslResult<(Stri
 fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -> DslResult<()> {
     let name = &item.name;
     match &item.kind {
+        VarKind::Repeat { count, items } => {
+            let count_n = ctx.ev(count, "repeat 重复次数")? as i64;
+            if count_n < 1 {
+                return Err(DslError::bare("repeat 重复次数应 >= 1"));
+            }
+            for _ in 0..count_n {
+                // 每轮全新环境：继承外层变量值，块内定义不污染外层
+                let mut inner = GenCtx { env: ctx.env.clone(), rng: ctx.rng };
+                gen_items(&mut inner, items, lines)?;
+            }
+        }
         VarKind::Line { rows, items } => {
             let rows_n = ctx.ev(rows, "重复行数")? as i64;
             if rows_n < 1 {
@@ -604,23 +615,7 @@ pub fn generate(config: &Config, seed: Option<u64>) -> DslResult<Vec<String>> {
 /// 指定 RNG 生成（供对拍循环复用同一种子流）。
 pub fn generate_with(config: &Config, rng: &mut StdRng) -> DslResult<Vec<String>> {
     let mut lines: Vec<String> = Vec::new();
-    match &config.repeat {
-        Some(rep) => {
-            // repeat 块：N 轮，每轮全新环境（变量正常命名、每次覆盖），不输出组数行
-            let mut ctx = GenCtx { env: HashMap::new(), rng };
-            let count = ctx.ev(&rep.count, "repeat 重复次数")? as i64;
-            if count < 1 {
-                return Err(DslError::bare("repeat 重复次数应 >= 1"));
-            }
-            for _ in 0..count {
-                let mut ctx = GenCtx { env: HashMap::new(), rng };
-                gen_items(&mut ctx, &rep.items, &mut lines)?;
-            }
-        }
-        None => {
-            let mut ctx = GenCtx { env: HashMap::new(), rng };
-            gen_items(&mut ctx, &config.items, &mut lines)?;
-        }
-    }
+    let mut ctx = GenCtx { env: HashMap::new(), rng };
+    gen_items(&mut ctx, &config.items, &mut lines)?;
     Ok(lines)
 }

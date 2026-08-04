@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use duipai_core::{eval_expr, generate, parse, serialize, validate, EnvValue};
+use duipai_core::{eval_expr, generate, parse, serialize, validate, EnvValue, VarKind};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -26,13 +26,15 @@ repeat (3):
     F = matf(int(1, 5), n, 0, 1, 4)
 ";
     let cfg = parse(text).expect("parse should succeed");
-    let rep = cfg.repeat.expect("repeat block");
-    assert_eq!(rep.count, "3");
-    assert_eq!(rep.items.len(), 7);
-    assert!(matches!(rep.items[0].kind, duipai_core::VarKind::Line { .. }));
-    assert_eq!(rep.items[1].name, "a");
-    assert_eq!(rep.items[5].name, "M");
-    assert!(cfg.items.is_empty());
+    assert_eq!(cfg.items.len(), 1);
+    let VarKind::Repeat { count, items: rep_items } = &cfg.items[0].kind else {
+        panic!("应解析为 repeat 块");
+    };
+    assert_eq!(count, "3");
+    assert_eq!(rep_items.len(), 7);
+    assert!(matches!(rep_items[0].kind, duipai_core::VarKind::Line { .. }));
+    assert_eq!(rep_items[1].name, "a");
+    assert_eq!(rep_items[5].name, "M");
 }
 
 #[test]
@@ -63,7 +65,7 @@ a = ints(2*n, 1, 9)
 b = floats(3, 0, 1)
 ";
     let cfg = parse(text).expect("parse");
-    assert!(cfg.repeat.is_none());
+    assert!(cfg.items.iter().all(|it| !matches!(it.kind, duipai_core::VarKind::Repeat { .. })));
     let out = serialize(&cfg).expect("serialize");
     // legacy 行为：`*` 运算符序列化时带空格（"2 * n"）
     assert_eq!(
@@ -76,29 +78,65 @@ b = floats(3, 0, 1)
 fn repeat_block_variants() {
     // count 为常量表达式
     let cfg = parse("repeat (2*3):\n    line:\n        int n: 1, 2").expect("parse");
-    assert_eq!(cfg.repeat.unwrap().count, "2 * 3");
+    let VarKind::Repeat { count, .. } = &cfg.items[0].kind else { panic!("repeat") };
+    assert_eq!(count, "2 * 3");
     // 缺括号
     let e = parse("repeat 3:\n    line:\n        int n: 1, 2").expect_err("no paren");
     assert!(e.message.contains("repeat (N):"), "{e}");
     // 空块
     let e = parse("repeat (3):").expect_err("empty");
     assert!(e.message.contains("至少需要一个语句"), "{e}");
-    // 重复出现
-    let e = parse("repeat (3):\n    line:\n        int n: 1, 2\nrepeat (3):\n    line:\n        int m: 1, 2")
-        .expect_err("dup");
-    assert!(e.message.contains("只能出现一次"), "{e}");
-    // 块后不允许其他语句
-    let e = parse("repeat (3):\n    line:\n        int n: 1, 2\na = ints(3, 1, 9)").expect_err("after");
-    assert!(e.message.contains("必须包裹全部语句"), "{e}");
     // 嵌套禁止
     let e = parse("repeat (3):\n    repeat (2):\n        line:\n            int n: 1, 2").expect_err("nest");
     assert!(e.message.contains("不能嵌套"), "{e}");
-    // repeat 前不允许其他语句
-    let e = parse("a = ints(3, 1, 9)\nrepeat (3):\n    line:\n        int n: 1, 2").expect_err("before");
-    assert!(e.message.contains("必须放在最前"), "{e}");
     // 多测模式注释不再识别（作为普通注释忽略）
     let cfg = parse("# 多测模式：重复 5 次\nline:\n    int n: 1, 2").expect("parse");
-    assert!(cfg.repeat.is_none(), "多测注释已废弃");
+    assert!(cfg.items.iter().all(|it| !matches!(it.kind, duipai_core::VarKind::Repeat { .. })), "多测注释已废弃");
+}
+
+#[test]
+fn repeat_multiple_and_mixed() {
+    // 多个 repeat + 与其他语句混排，顺序执行
+    let text = "\
+line:
+    int n: 1, 9
+repeat (2):
+    line:
+        int a: n, n
+repeat (3):
+    line:
+        int b: 1, 1
+a = ints(n, 1, 9)
+";
+    let cfg = parse(text).expect("parse");
+    let kinds: Vec<&str> = cfg
+        .items
+        .iter()
+        .map(|it| match &it.kind {
+            duipai_core::VarKind::Repeat { .. } => "repeat",
+            _ => "stmt",
+        })
+        .collect();
+    assert_eq!(kinds, vec!["stmt", "repeat", "repeat", "stmt"], "{kinds:?}");
+    // 序列化往返
+    let out = serialize(&cfg).expect("serialize");
+    let cfg2 = parse(&out).expect("re-parse");
+    assert_eq!(cfg, cfg2);
+    // 生成：1 行 n + 2 轮 a + 3 轮 b + 1 行数组 = 1+2+3+1 = 7 行
+    let lines = generate(&cfg, Some(1)).unwrap();
+    assert_eq!(lines.len(), 7, "{lines:?}");
+}
+
+#[test]
+fn repeat_scope_isolation() {
+    // 块内变量块外不可见
+    let cfg = parse("repeat (2):\n    line:\n        int x: 1, 9\na = ints(x, 1, 9)").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("未定义的变量")), "{errs:?}");
+    // 块内可引用块前变量
+    let cfg = parse("line:\n    int n: 1, 9\nrepeat (n):\n    line:\n        int a: 1, 2").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
 }
 
 #[test]
@@ -364,7 +402,7 @@ fn expr_seeded_deterministic() {
 #[test]
 fn empty_and_whitespace_parse() {
     let cfg = parse("").expect("empty ok");
-    assert!(cfg.items.is_empty() && cfg.repeat.is_none());
+    assert!(cfg.items.is_empty());
     let cfg = parse("   \n\n  # 只有注释\n").expect("blank ok");
     assert!(cfg.items.is_empty());
 }

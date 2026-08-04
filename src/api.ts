@@ -24,6 +24,7 @@ export interface LineItem {
 
 export type VarKind =
   | { Line: { rows: string; items: LineItem[] } }
+  | { Repeat: { count: string; items: Item[] } }
   | {
       Array: {
         elem_type: ElemType;
@@ -75,15 +76,7 @@ export interface Item {
   line: number;
 }
 
-export interface RepeatBlock {
-  /** 重复次数表达式（常量，如 "3"、"2*3"）。 */
-  count: string;
-  /** 块内语句。 */
-  items: Item[];
-}
-
 export interface Config {
-  repeat: RepeatBlock | null;
   items: Item[];
 }
 

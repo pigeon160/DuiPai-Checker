@@ -816,3 +816,11 @@ input.invalid,
 }
 .move-btn:disabled { opacity: 0.35; cursor: default; }
 .repeat-box { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.repeat-row { display: flex; align-items: flex-start; }
+.repeat-row .line-head { flex: 1; }
+.repeat-body {
+  flex: 1; margin-left: 26px; border-left: 2px solid #FDE68A; padding-left: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.repeat-add { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.repeat-label { font-size: 13px; color: var(--text-2); }

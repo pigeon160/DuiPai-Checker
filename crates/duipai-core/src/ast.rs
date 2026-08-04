@@ -6,23 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// repeat 块：`repeat (N):` + 缩进语句。
-///
-/// 生成语义：块内所有语句重复 N 次，每轮全新随机环境（变量名正常表示，
-/// 每次覆盖上一轮的值），不输出组数行。repeat 只能出现一次且在顶层。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RepeatBlock {
-    /// 重复次数表达式（常量，如 `3`、`2*3`）。
-    pub count: String,
-    /// 块内语句（按定义顺序执行）。
-    pub items: Vec<Item>,
-}
-
 /// 一份完整配置。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Config {
-    pub repeat: Option<RepeatBlock>,
-    /// repeat 为空时按定义顺序排列的语句列表（顺序即生成顺序）。
+    /// 按定义顺序排列的语句列表（顺序即生成顺序；可含 repeat 块）。
     pub items: Vec<Item>,
 }
 
@@ -136,6 +123,12 @@ pub enum VarKind {
         ylo: String,
         yhi: String,
     },
+    /// repeat 块：`repeat (N):` + 缩进语句。
+    ///
+    /// 整体重复 N 次，每轮全新随机环境（变量名正常表示，每次覆盖上一轮
+    /// 的值），不输出组数行。可出现在顶层任意位置（多个/与其他语句混排），
+    /// 块内变量在块外不可见；不能嵌套。
+    Repeat { count: String, items: Vec<Item> },
     /// 树：`t = tree(n[, type=...][, 边权])`（type: star 菊花图 / chain 链）
     Tree {
         n: String,
@@ -161,6 +154,6 @@ pub enum VarKind {
 
 impl Config {
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty() && self.repeat.as_ref().map_or(true, |r| r.items.is_empty())
+        self.items.is_empty()
     }
 }

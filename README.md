@@ -62,7 +62,8 @@ t = tree(n, int(1, 10))
 - 边权直接写范围：`tree(5, int(1, 9))`；图选项 `multi=1`（重边）/ `loop=1`（自环）/ `type="dag"|"bipartite"`
 - 树类型 `type="star"`（菊花图）/ `type="chain"`（链）
 - 已废弃：`val=`（节点权值）、`w=`（边权）、`prec=`（精度）等关键字写法，统一用位置参数
-- repeat 块：`repeat (N):` + 缩进语句，整体重复 N 次、变量每轮覆盖（无组数行）
+- repeat 块：`repeat (N):` + 缩进语句，普通顶层语句（可多个/混排），整体重复 N 次、
+  变量每轮覆盖（无组数行），块内变量块外不可见
 
 完整语法见 [docs/DSL.md](docs/DSL.md)。
 

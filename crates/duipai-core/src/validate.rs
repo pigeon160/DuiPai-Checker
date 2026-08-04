@@ -289,39 +289,37 @@ fn check_line_item(
 /// 校验一份配置，返回错误列表（每个错误带行号）。
 pub fn validate(config: &Config) -> Vec<DslError> {
     let mut errors: Vec<DslError> = Vec::new();
-    if let Some(rep) = &config.repeat {
-        // repeat 块：重复次数常量 >= 1（无外部变量可引用）
-        let mut rng = StdRng::seed_from_u64(0);
-        match parse_expr(&rep.count) {
-            Ok(node) => {
-                let mut names = Vec::new();
-                collect_names(&node, &mut names);
-                if !names.is_empty() {
-                    errors.push(DslError::at(
-                        0,
-                        "repeat 重复次数表达式不能引用变量（块内无外部变量）",
-                    ));
-                } else if let Ok(v) = eval_node(&node, &HashMap::new(), &mut rng) {
-                    if v < 1.0 {
-                        errors.push(DslError::at(0, "repeat 重复次数应 >= 1"));
-                    }
-                }
-            }
-            Err(e) => errors.push(DslError::at(0, format!("repeat 重复次数表达式错误：{}", e.message))),
-        }
-        validate_items(&rep.items, &mut errors);
-    }
     validate_items(&config.items, &mut errors);
     errors
 }
 
-/// 校验语句列表（repeat 块 / 顶层共用）。
+/// 校验语句列表（顶层入口：空环境开始）。
 fn validate_items(items: &[crate::ast::Item], errors: &mut Vec<DslError>) {
     let mut types: HashMap<String, VarKind> = HashMap::new();
+    validate_items_inner(items, &mut types, errors);
+}
+
+/// 校验语句列表（repeat 块 / 顶层共用）。
+///
+/// `types` 从外部传入：repeat 块内可引用块前的变量，块内定义的变量
+/// 在块外不可见（作用域快照语义）。
+fn validate_items_inner(
+    items: &[crate::ast::Item],
+    types: &mut HashMap<String, VarKind>,
+    errors: &mut Vec<DslError>,
+) {
     for item in items {
         let line = item.line;
         let kind = &item.kind;
         match kind {
+            VarKind::Repeat { count, items } => {
+                // 重复次数：可引用块前变量（check_field 做引用检查），常量时 >= 1
+                check_field(count, "repeat 重复次数", types, &mut *errors, line);
+                check_const(count, "repeat 重复次数", "repeat 重复次数应 >= 1", |v| v >= 1.0, &mut *errors, line);
+                // 块内：继承当前 types 快照，块内定义的变量不泄漏到块外
+                let mut inner_types = types.clone();
+                validate_items_inner(items, &mut inner_types, errors);
+            }
             VarKind::Line { rows, items } => {
                 // 逐项检查并渐进登记名字：同一行内后者可引用前者（按当前行标量语义）
                 for it in items {
@@ -504,6 +502,9 @@ fn validate_items(items: &[crate::ast::Item], errors: &mut Vec<DslError>) {
             }
         }
         match kind {
+            VarKind::Repeat { .. } => {
+                // repeat 块不登记名字（块内变量块外不可见）
+            }
             VarKind::Line { items, .. } => {
                 for it in items {
                     types.insert(it.name.clone(), kind.clone());

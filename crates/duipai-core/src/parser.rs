@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    Config, ElemType, GraphType, Item, LineItem, LineItemKind, RepeatBlock, VarKind, Weight,
+    Config, ElemType, GraphType, Item, LineItem, LineItemKind, VarKind, Weight,
 };
 use crate::error::{DslError, DslResult};
 use crate::expr::{tokenize, Tok};
@@ -721,13 +721,12 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
 /// 解析 DSL 文本，返回 IR 配置；语法/语义错误带行号。
 ///
 /// 顶层结构：
-/// - `repeat (N):` 块：唯一且包裹全部语句（缩进子块），优先级最高
-/// - 行块 / 顶层命令（repeat 之外）
+/// - `repeat (N):` 块：普通顶层语句（可多个、可与其他语句混排），不能嵌套
+/// - 行块 / 顶层命令
 pub fn parse(text: &str) -> DslResult<Config> {
     let lines: Vec<&str> = text.lines().collect();
     let mut items: Vec<Item> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut repeat: Option<RepeatBlock> = None;
     let mut i = 0usize;
     while i < lines.len() {
         let raw = lines[i];
@@ -744,26 +743,10 @@ pub fn parse(text: &str) -> DslResult<Config> {
         }
         let toks = tokenize(raw.trim()).map_err(|e| e.with_line(i + 1))?;
         if matches!(toks.first(), Some(Tok::Name(k)) if k == "repeat") {
-            if repeat.is_some() {
-                return Err(DslError::at(i + 1, "repeat 块只能出现一次"));
-            }
-            if !items.is_empty() {
-                return Err(DslError::at(
-                    i + 1,
-                    "repeat 块必须放在最前（优先级高于其他所有语句）",
-                ));
-            }
-            let (block, consumed) = parse_repeat_block(&lines, i, &mut seen)?;
-            repeat = Some(block);
+            let (item, consumed) = parse_repeat_block(&lines, i, &mut seen)?;
+            items.push(item);
             i += consumed;
             continue;
-        }
-        if repeat.is_some() {
-            // repeat 块后不允许其他顶层语句
-            return Err(DslError::at(
-                i + 1,
-                "repeat 块必须包裹全部语句（块后不允许其他顶层语句）",
-            ));
         }
         if matches!(toks.first(), Some(Tok::Name(k)) if k == LINE_KEYWORD) {
             let (item, consumed) = parse_line_block(&lines, i, 0, &mut seen)?;
@@ -774,16 +757,15 @@ pub fn parse(text: &str) -> DslResult<Config> {
             i += 1;
         }
     }
-    Ok(Config { repeat, items })
+    Ok(Config { items })
 }
 
-/// 解析 repeat 块：`repeat (N):` + 缩进子语句。
-/// 返回 (RepeatBlock, 消费的行数)。
+/// 解析 repeat 块：`repeat (N):` + 缩进子语句，返回 (Item, 消费的行数)。
 fn parse_repeat_block(
     lines: &[&str],
     start: usize,
     seen: &mut HashSet<String>,
-) -> DslResult<(RepeatBlock, usize)> {
+) -> DslResult<(Item, usize)> {
     let lineno = start + 1;
     let toks = tokenize(lines[start]).map_err(|e| e.with_line(lineno))?;
     // repeat [ ( N ) ] :
@@ -829,8 +811,9 @@ fn parse_repeat_block(
         return Err(DslError::at(lineno, "repeat 块声明行有多余内容"));
     }
 
-    // 缩进子语句（行块 / 顶层命令）
+    // 缩进子语句（行块 / 顶层命令）；块内变量不泄漏到块外（作用域隔离）
     let mut items: Vec<Item> = Vec::new();
+    let mut inner_seen = seen.clone();
     let mut i = start + 1;
     while i < lines.len() {
         let raw = lines[i];
@@ -848,11 +831,11 @@ fn parse_repeat_block(
             return Err(DslError::at(i + 1, "repeat 块不能嵌套"));
         }
         if matches!(sub_toks.first(), Some(Tok::Name(k)) if k == LINE_KEYWORD) {
-            let (item, consumed) = parse_line_block(&lines, i, indent, seen)?;
+            let (item, consumed) = parse_line_block(&lines, i, indent, &mut inner_seen)?;
             items.push(item);
             i += consumed;
         } else {
-            items.push(parse_statement(sub, i + 1, seen)?);
+            items.push(parse_statement(sub, i + 1, &mut inner_seen)?);
             i += 1;
         }
     }
@@ -862,5 +845,12 @@ fn parse_repeat_block(
             "repeat 块内至少需要一个语句（行块或命令）",
         ));
     }
-    Ok((RepeatBlock { count, items }, i - start))
+    Ok((
+        Item {
+            name: String::new(),
+            kind: VarKind::Repeat { count, items },
+            line: lineno,
+        },
+        i - start,
+    ))
 }

@@ -66,6 +66,15 @@ fn line_item_line(item: &crate::ast::LineItem) -> String {
 pub fn lines_for(item: &Item) -> DslResult<Vec<String>> {
     let name = &item.name;
     let lines: Vec<String> = match &item.kind {
+        VarKind::Repeat { count, items } => {
+            let mut out = vec![format!("repeat ({count}):")];
+            for sub in items {
+                for l in lines_for(sub)? {
+                    out.push(format!("    {l}"));
+                }
+            }
+            out
+        }
         VarKind::Line { rows, items } => {
             let mut out = Vec::new();
             if rows == "1" {
@@ -181,15 +190,6 @@ pub fn lines_for(item: &Item) -> DslResult<Vec<String>> {
 /// 把配置序列化为 DSL 文本。
 pub fn serialize(config: &Config) -> DslResult<String> {
     let mut out: Vec<String> = Vec::new();
-    if let Some(repeat) = &config.repeat {
-        out.push(format!("repeat ({}):", repeat.count));
-        for item in &repeat.items {
-            let sub = lines_for(item)?;
-            for l in sub {
-                out.push(format!("    {l}"));
-            }
-        }
-    }
     for item in &config.items {
         out.extend(lines_for(item)?);
     }

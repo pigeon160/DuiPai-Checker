@@ -23,6 +23,21 @@ export function nameError(name: string, taken?: (n: string) => boolean): string 
 export const KIND_ORDER: { kind: VarKind; label: string }[] = [
   {
     kind: {
+      Repeat: {
+        count: "3",
+        items: [
+          {
+            name: "",
+            kind: { Line: { rows: "1", items: [{ name: "n", kind: { Int: { min: "1", max: "100" } } }] } },
+            line: 0,
+          },
+        ],
+      },
+    },
+    label: "repeat 块（整体重复）",
+  },
+  {
+    kind: {
       Line: {
         rows: "1",
         items: [
@@ -62,6 +77,7 @@ export const KIND_ORDER: { kind: VarKind; label: string }[] = [
 
 /** 类型徽标配色（淡底深字 pill）。 */
 const KIND_COLORS: Record<string, { bg: string; fg: string }> = {
+  Repeat: { bg: "#FEF3C7", fg: "#B45309" },
   Line: { bg: "#EDE9FE", fg: "#7C3AED" },
   Array: { bg: "#DBEAFE", fg: "#2563EB" },
   Perm: { bg: "#CFFAFE", fg: "#0891B2" },
@@ -81,6 +97,7 @@ export function kindLabel(kind: VarKind): string {
   const key = Object.keys(kind)[0];
   const k = kind as Record<string, unknown>;
   switch (key) {
+    case "Repeat": return "repeat";
     case "Line": return "行";
     case "Array": return (k.Array as { elem_type: ElemType }).elem_type === "Int" ? "整数数组" : "浮点数组";
     case "Perm": return "排列";
