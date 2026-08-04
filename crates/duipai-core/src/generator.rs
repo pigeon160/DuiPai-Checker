@@ -243,14 +243,35 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
             if rows_n < 1 {
                 return Err(DslError::bare("重复行数不能小于 1"));
             }
-            for _ in 0..rows_n {
-                let mut row = Vec::with_capacity(parts.len());
-                for p in parts {
-                    let value = ctx.ev(&p.expr, "表达式")?;
-                    row.push(format_float(value, 12));
-                    ctx.env.insert(p.name.clone(), EnvValue::Scalar(value));
+            // rows 静态非 1：行变量数组化（引用须 n[k]）
+            if crate::serializer::is_single_row(rows) {
+                for _ in 0..rows_n {
+                    let mut row = Vec::with_capacity(parts.len());
+                    for p in parts {
+                        let value = ctx.ev(&p.expr, "表达式")?;
+                        row.push(format_float(value, 12));
+                        ctx.env.insert(p.name.clone(), EnvValue::Scalar(value));
+                    }
+                    lines.push(row.join(" "));
                 }
-                lines.push(row.join(" "));
+            } else {
+                let mut values: Vec<Vec<f64>> =
+                    vec![Vec::with_capacity(rows_n as usize); parts.len()];
+                for _ in 0..rows_n {
+                    let mut row = Vec::with_capacity(parts.len());
+                    for (i, p) in parts.iter().enumerate() {
+                        let value = ctx.ev(&p.expr, "表达式")?;
+                        row.push(format_float(value, 12));
+                        values[i].push(value);
+                        // 同行引用：先按标量登记（当前行值）
+                        ctx.env.insert(p.name.clone(), EnvValue::Scalar(value));
+                    }
+                    lines.push(row.join(" "));
+                }
+                // 行结束后数组化（引用须 n[k]）
+                for (i, p) in parts.iter().enumerate() {
+                    ctx.env.insert(p.name.clone(), EnvValue::Grid(vec![values[i].clone()]));
+                }
             }
         }
         VarKind::Scalar { expr } => {

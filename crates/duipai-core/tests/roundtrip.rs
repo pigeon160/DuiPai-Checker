@@ -629,3 +629,59 @@ fn index_into_string_rejected() {
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("不是数组")), "{errs:?}");
 }
+
+// --------------------------------------------------------------------------- //
+// 重复行变量数组化：n[k] 取第 k 行
+// --------------------------------------------------------------------------- //
+
+#[test]
+fn repeat_row_name_array_ref() {
+    // repeat(3) 后 n、m 数组化，x = n[2] 取第 2 行 n
+    let cfg = parse(
+        "n = int(1, 5), m = int(1, 5), repeat(3)\nx = n[2]\ny = m[1]\n",
+    )
+    .expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(7)).unwrap();
+    assert_eq!(lines.len(), 5);
+    let row2_n = lines[1].split_whitespace().next().unwrap();
+    let row1_m = lines[0].split_whitespace().nth(1).unwrap();
+    assert_eq!(lines[3], row2_n, "x = n[2] 应等于第 2 行 n：{lines:?}");
+    assert_eq!(lines[4], row1_m, "y = m[1] 应等于第 1 行 m：{lines:?}");
+}
+
+#[test]
+fn repeat_row_scalar_ref_rejected() {
+    let cfg = parse("n = int(1, 5), m = int(1, 5), repeat(3)\nx = n + 1\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(
+        errs.iter().any(|e| e.message.contains("已数组化")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn repeat_row_index_oob() {
+    let cfg = parse("n = int(1, 5), m = int(1, 5), repeat(3)\nx = n[5]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("越界")), "{errs:?}");
+}
+
+#[test]
+fn single_row_multi_not_indexable() {
+    // 不重复的行变量是标量，不能索引
+    let cfg = parse("n = int(1, 5), m = int(1, 5)\nx = n[1]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("不是数组")), "{errs:?}");
+}
+
+#[test]
+fn repeat_row_roundtrip() {
+    let text = "n = int(1, 5), m = float(0, 1), repeat(k)\n";
+    let cfg = parse(text).expect("parse");
+    let out = serialize(&cfg).expect("serialize");
+    assert_eq!(out, "n = int(1, 5), m = float(0, 1), repeat(k)");
+    let cfg2 = parse(&out).expect("re-parse");
+    assert_eq!(cfg, cfg2);
+}

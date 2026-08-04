@@ -104,7 +104,132 @@ function TextFields({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => v
   );
 }
 
-/** 多赋值表单：每项 name + expr，常驻"＋ 数"与"重复 N 行"（实时校验）。 */
+/** 简单 int(a,b) / float(a,b[,p]) 形式识别（GUI 类型下拉用）。 */
+const INT_RE = /^int\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)$/;
+const FLOAT_RE = /^float\(\s*([^,()]+)\s*,\s*([^,()]+)\s*(?:,\s*([^,()]+)\s*)?\)$/;
+
+type PartType = "Int" | "Float" | "Expr";
+
+function partType(expr: string): PartType {
+  if (INT_RE.test(expr)) return "Int";
+  if (FLOAT_RE.test(expr)) return "Float";
+  return "Expr";
+}
+
+/** 行内单个数编辑：类型下拉（整数/浮点/表达式）+ 对应参数。 */
+function PartEditor({
+  part,
+  onChange,
+  onRemove,
+  nameTaken,
+}: {
+  part: MultiPart;
+  onChange: (p: MultiPart) => void;
+  onRemove: () => void;
+  nameTaken?: (n: string) => boolean;
+}) {
+  const t = partType(part.expr);
+  const im = INT_RE.exec(part.expr);
+  const fm = FLOAT_RE.exec(part.expr);
+  const min = im?.[1] ?? fm?.[1] ?? "";
+  const max = im?.[2] ?? fm?.[2] ?? "";
+  const prec = fm?.[3] ?? "6";
+  const nameErr = nameError(part.name, nameTaken);
+
+  const toInt = (lo: string, hi: string) => `int(${lo}, ${hi})`;
+  const toFloat = (lo: string, hi: string, p: string) =>
+    p === "6" ? `float(${lo}, ${hi})` : `float(${lo}, ${hi}, ${p})`;
+
+  return (
+    <span className={`multi-part${nameErr ? " invalid" : ""}`}>
+      <input
+        className="name-input small-name"
+        value={part.name}
+        onChange={(e) => onChange({ ...part, name: e.target.value })}
+        placeholder="名字"
+        title={nameErr ?? "该数名字"}
+        spellCheck={false}
+      />
+      <select
+        value={t}
+        title="该数类型：整数（随机范围）/ 浮点（+精度）/ 表达式（自由组合）"
+        onChange={(e) => {
+          const nt = e.target.value as PartType;
+          if (nt === "Int") onChange({ ...part, expr: toInt(min || "1", max || "100") });
+          else if (nt === "Float")
+            onChange({ ...part, expr: toFloat(min || "0", max || "1", prec) });
+          // Expr：保留当前表达式文本可编辑
+        }}
+      >
+        <option value="Int">整数</option>
+        <option value="Float">浮点</option>
+        <option value="Expr">表达式</option>
+      </select>
+      {t === "Int" && (
+        <>
+          <input
+            className="field-input small"
+            value={min}
+            onChange={(e) => onChange({ ...part, expr: toInt(e.target.value, max) })}
+            placeholder="min"
+            title="最小值"
+          />
+          <input
+            className="field-input small"
+            value={max}
+            onChange={(e) => onChange({ ...part, expr: toInt(min, e.target.value) })}
+            placeholder="max"
+            title="最大值"
+          />
+        </>
+      )}
+      {t === "Float" && (
+        <>
+          <input
+            className="field-input small"
+            value={min}
+            onChange={(e) => onChange({ ...part, expr: toFloat(e.target.value, max, prec) })}
+            placeholder="lo"
+            title="下界"
+          />
+          <input
+            className="field-input small"
+            value={max}
+            onChange={(e) => onChange({ ...part, expr: toFloat(min, e.target.value, prec) })}
+            placeholder="hi"
+            title="上界"
+          />
+          <input
+            className="field-input small"
+            value={prec}
+            onChange={(e) => onChange({ ...part, expr: toFloat(min, max, e.target.value) })}
+            placeholder="prec"
+            title="精度（默认 6）"
+          />
+        </>
+      )}
+      {t === "Expr" && (
+        <input
+          className="field-input expr-input"
+          value={part.expr}
+          onChange={(e) => onChange({ ...part, expr: e.target.value })}
+          placeholder="2 * n + a[1]"
+          title="自由表达式：常数/引用/int()/float()/算术/数组索引"
+          spellCheck={false}
+        />
+      )}
+      <button
+        className="del-btn"
+        onClick={onRemove}
+        title="删除该数"
+      >
+        ✕
+      </button>
+    </span>
+  );
+}
+
+/** 行（多赋值）表单：行级重复开关 + 行内每项独立类型，常驻"＋ 数"。 */
 function MultiForm({
   kind,
   onKind,
@@ -116,6 +241,9 @@ function MultiForm({
 }) {
   const { rows, parts } = (kind as { Multi: { rows: string; parts: MultiPart[] } }).Multi;
   const [rowsError, setRowsError] = useState<string | null>(null);
+  // 重复开关：rows 非 "1"（含表达式）即视为重复
+  const repeatOn = rows.trim() !== "" && rows.trim() !== "1";
+  const setRows = (r: string) => onKind({ Multi: { rows: r, parts } } as unknown as VarKind);
   const setParts = (parts: MultiPart[]) =>
     onKind({ Multi: { rows, parts } } as unknown as VarKind);
 
@@ -123,7 +251,7 @@ function MultiForm({
   useEffect(() => {
     let cancelled = false;
     const t = setTimeout(async () => {
-      if (rows.trim() === "") {
+      if (rows.trim() === "" || rows.trim() === "1") {
         if (!cancelled) setRowsError(null);
         return;
       }
@@ -147,54 +275,42 @@ function MultiForm({
 
   return (
     <>
-      <span className={`multi-part${rowsError ? " invalid" : ""}`} title="重复输出行数（表达式，默认 1 行）">
-        <span className="wg-label">重复</span>
-        <input
-          className="field-input small"
-          value={rows}
-          onChange={(e) =>
-            onKind({ Multi: { rows: e.target.value, parts } } as unknown as VarKind)
-          }
-          placeholder="1"
-          spellCheck={false}
-        />
-        <span className="wg-label">行</span>
-        {rowsError && <span className="inline-err">{rowsError}</span>}
+      <span className={`multi-part${rowsError ? " invalid" : ""}`}>
+        <label className="repeat-toggle" title="重复输出多行">
+          <input
+            type="checkbox"
+            checked={repeatOn}
+            onChange={(e) => setRows(e.target.checked ? "2" : "1")}
+          />
+          重复
+        </label>
+        {repeatOn && (
+          <>
+            <input
+              className="field-input small"
+              value={rows}
+              onChange={(e) => setRows(e.target.value)}
+              placeholder="N"
+              title="重复行数（表达式，可引用前面变量）"
+              spellCheck={false}
+            />
+            <span className="wg-label">行</span>
+            {rowsError && <span className="inline-err">{rowsError}</span>}
+          </>
+        )}
       </span>
-      {parts.map((p, i) => {
-        const err = nameError(p.name, nameTaken);
-        return (
-          <span key={i} className={`multi-part${err ? " invalid" : ""}`}>
-            <input
-              className="name-input small-name"
-              value={p.name}
-              onChange={(e) =>
-                setParts(parts.map((q, j) => (j === i ? { ...q, name: e.target.value } : q)))
-              }
-              placeholder={`名${i + 1}`}
-              title={err ?? `第 ${i + 1} 个数名字`}
-              spellCheck={false}
-            />
-            <input
-              className="field-input expr-input"
-              title={`第 ${i + 1} 个数表达式（int()/float()/算术/引用/数组索引均可）`}
-              value={p.expr}
-              onChange={(e) =>
-                setParts(parts.map((q, j) => (j === i ? { ...q, expr: e.target.value } : q)))
-              }
-              placeholder="int(1, 100)"
-              spellCheck={false}
-            />
-            <button
-              className="del-btn"
-              onClick={() => setParts(parts.filter((_, j) => j !== i))}
-              title="删除该数"
-            >
-              ✕
-            </button>
-          </span>
-        );
-      })}
+      {repeatOn && (
+        <span className="repeat-hint">重复行变量名按 n[k] 数组形式引用</span>
+      )}
+      {parts.map((p, i) => (
+        <PartEditor
+          key={i}
+          part={p}
+          nameTaken={nameTaken}
+          onChange={(np) => setParts(parts.map((q, j) => (j === i ? np : q)))}
+          onRemove={() => setParts(parts.filter((_, j) => j !== i))}
+        />
+      ))}
       <button
         onClick={() =>
           setParts([

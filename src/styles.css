@@ -267,6 +267,21 @@ input.invalid,
   white-space: nowrap;
 }
 
+.repeat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: #57606a;
+  white-space: nowrap;
+}
+
+.repeat-hint {
+  font-size: 11px;
+  color: #9a6700;
+  white-space: nowrap;
+}
+
 .weight-group {
   display: inline-flex;
   align-items: center;

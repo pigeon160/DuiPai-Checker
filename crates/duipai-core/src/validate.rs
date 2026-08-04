@@ -103,6 +103,27 @@ fn check_indexes(
                         }
                     }
                 }
+                // 重复行变量数组化：1 层索引，维度 = 行数
+                Some(VarKind::Multi { rows, .. }) if !is_single_row(rows) => {
+                    if indices.len() != 1 {
+                        errors.push(DslError::at(
+                            line,
+                            format!("索引层数错误：重复行变量 {name} 需要 1 个索引（{name}[k]）"),
+                        ));
+                    } else {
+                        let idx_text = expr_text_of(&indices[0]);
+                        if !idx_text.is_empty() {
+                            if let (Ok(Some(dim)), Ok(Some(iv))) = (try_const(rows), try_const(&idx_text)) {
+                                if iv < 1.0 || iv > dim {
+                                    errors.push(DslError::at(
+                                        line,
+                                        format!("索引 {name}[{iv}] 越界（重复行数 {dim}）"),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
                 Some(_) => {
                     errors.push(DslError::at(line, format!("变量 {name} 不是数组，不能索引引用")));
                 }
@@ -172,11 +193,26 @@ fn check_field(expr: &str, label: &str, types: &HashMap<String, VarKind>, errors
                 line,
                 format!("{label}表达式错误：引用了未定义的变量：{name}"),
             )),
-            Some(kind) if !is_refable(kind) => errors.push(DslError::at(
-                line,
-                format!("{label}表达式错误：变量 {name} 类型不可作为引用源"),
-            )),
-            Some(_) => {}
+            Some(kind) => {
+                // 重复行（rows 非 1）变量已数组化：普通引用须改用 n[k]
+                if let VarKind::Multi { rows, .. } = kind {
+                    if !is_single_row(rows) {
+                        errors.push(DslError::at(
+                            line,
+                            format!(
+                                "{label}表达式错误：重复行变量 {name} 已数组化，请用 {name}[k] 索引引用"
+                            ),
+                        ));
+                        continue;
+                    }
+                }
+                if !is_refable(kind) {
+                    errors.push(DslError::at(
+                        line,
+                        format!("{label}表达式错误：变量 {name} 类型不可作为引用源"),
+                    ));
+                }
+            }
         }
     }
     check_indexes(&node, types, errors, line);
@@ -236,9 +272,16 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                 check_lo_hi(min, max, "整数变量范围", "整数变量范围最小值不能大于最大值", &mut errors, line);
             }
             VarKind::Multi { rows, parts } => {
-                // 逐 part 检查并渐进登记名字：同一行内后者可引用前者
+                // 逐 part 检查并渐进登记名字：同一行内后者可引用前者（按当前行标量语义）
                 for p in parts {
                     check_field(&p.expr, "", &types, &mut errors, line);
+                    types.insert(
+                        p.name.clone(),
+                        VarKind::Scalar { expr: String::new() },
+                    );
+                }
+                // 行结束后按真实语义登记（rows 非 1 时数组化，供后续语句引用检查）
+                for p in parts {
                     types.insert(p.name.clone(), kind.clone());
                 }
                 check_field(rows, "重复行数", &types, &mut errors, line);
