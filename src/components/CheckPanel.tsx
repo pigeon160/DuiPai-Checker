@@ -52,13 +52,25 @@ function ProgramRow({
         className="prog-cmd"
         value={spec.cmd}
         onChange={(e) => onChange({ ...spec, cmd: e.target.value })}
-        placeholder={spec.mode === "CppSource" ? "例如 C:\\path\\sol.cpp" : "例如 python3 sol.py"}
+        placeholder={
+          spec.mode === "CppSource"
+            ? spec.cmd.trim() === ""
+              ? "点右侧“导入…”选择 .cpp 文件"
+              : "C:\\path\\sol.cpp"
+            : "例如 python3 sol.py"
+        }
         spellCheck={false}
       />
-      {spec.mode === "CppSource" && spec.cmd.trim() !== "" && (
+      {spec.mode === "CppSource" && (
         <>
-          <button onClick={() => onPreview(spec.cmd)} title="读取源码内容预览">预览</button>
-          <button onClick={() => onImport(label)} title="选择 .cpp 文件">导入…</button>
+          <button onClick={() => onImport(label)} title="选择 .cpp 文件并填入路径">
+            导入…
+          </button>
+          {spec.cmd.trim() !== "" && (
+            <button onClick={() => onPreview(spec.cmd)} title="读取源码内容预览">
+              预览
+            </button>
+          )}
         </>
       )}
     </div>
