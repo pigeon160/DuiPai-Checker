@@ -8,18 +8,17 @@ export interface DslError {
 
 export type ElemType = "Int" | "Float";
 
-/** 多值行中的单个 part（一行多个数，可命名）。 */
+/** 多赋值中的单个项（一行多个数，每项 name = expr）。 */
 export interface MultiPart {
   name: string;
-  kind: ElemType;
-  min: string;
-  max: string;
-  prec: string;
+  /** 标量表达式原文 */
+  expr: string;
 }
 
 export type VarKind =
   | { Int: { min: string; max: string } }
   | { Multi: { parts: MultiPart[] } }
+  | { Scalar: { expr: string } }
   | { Float: { min: string; max: string; prec: string } }
   | {
       Array: {

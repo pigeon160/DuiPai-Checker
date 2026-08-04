@@ -7,6 +7,7 @@ GitHub：[pigeon160/DuiPai-Checker](https://github.com/pigeon160/DuiPai-Checker)
 
 > **开发中：Rust 重写**（离线桌面应用，Tauri 2 + React + 纯 Rust 核心）。
 > 旧版 Python（tkinter）实现已移入 [`legacy/`](legacy/)。
+> DSL 完整语法见 [docs/DSL.md](docs/DSL.md)。
 
 ---
 

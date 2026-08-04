@@ -370,6 +370,9 @@ pub fn eval_node(
                     if lo > hi {
                         return Err(DslError::bare(format!("float 范围 {lo} > {hi}")));
                     }
+                    if lo == hi {
+                        return Ok(lo);
+                    }
                     Ok(rng.random_range(lo..hi))
                 }
                 other => Err(DslError::bare(format!("未知函数调用：{other}"))),

@@ -432,113 +432,198 @@ fn check_name(name: &str, lineno: usize, seen: &mut HashSet<String>) -> DslResul
     Ok(())
 }
 
-/// 校验一个命令调用组（name( ... ) 结构），返回命令名与内部参数。
-fn group_cmd<'a>(group: &'a [Tok], lineno: usize) -> DslResult<(&'a str, &'a [Tok])> {
-    let cmd = match group.first() {
-        Some(Tok::Name(c)) => c.as_str(),
-        _ => return Err(DslError::at(lineno, "语句右侧必须是命令")),
-    };
-    if !is_known(cmd) {
-        return Err(DslError::at(lineno, format!("未知命令：{cmd}")));
+/// 检查表达式中的函数调用均为已知函数（int/float）。
+fn check_known_calls(node: &crate::expr::ExprNode) -> DslResult<()> {
+    match node {
+        crate::expr::ExprNode::Call { name, args } => {
+            if name != "int" && name != "float" {
+                return Err(DslError::bare(format!("未知函数调用：{name}")));
+            }
+            for a in args {
+                check_known_calls(a)?;
+            }
+        }
+        crate::expr::ExprNode::Neg(x) => check_known_calls(x)?,
+        crate::expr::ExprNode::Bin { l, r, .. } => {
+            check_known_calls(l)?;
+            check_known_calls(r)?;
+        }
+        _ => {}
     }
-    if !matches!(group.get(1), Some(Tok::Op(s)) if s == "(") {
-        return Err(DslError::at(lineno, format!("{cmd} 命令缺少左括号")));
+    Ok(())
+}
+
+/// 解析单个 `name = expr` 赋值组，返回 (name, 类型)。
+///
+/// RHS 判定优先级：
+/// 1. 命令调用（ints/perm/tree/…）→ 命令语义（原行为）
+/// 2. `int(a,b[,p])` / `float(a,b[,p])` 简单形式 → Int/Float（GUI 快捷编辑态）
+/// 3. 其他任意标量表达式 → Scalar（`n = 2*m+1`）
+fn parse_assign(rhs_toks: &[Tok], lineno: usize) -> DslResult<VarKind> {
+    // 命令调用？
+    if let Some(Tok::Name(cmd)) = rhs_toks.first() {
+        if is_known(cmd) && matches!(rhs_toks.get(1), Some(Tok::Op(s)) if s == "(") {
+            if let Some(Tok::Op(s)) = rhs_toks.last() {
+                if s == ")" {
+                    return parse_cmd(cmd, &rhs_toks[2..rhs_toks.len() - 1])
+                        .map_err(|e| e.with_line(lineno));
+                }
+            }
+        }
     }
-    if !matches!(group.last(), Some(Tok::Op(s)) if s == ")") {
-        return Err(DslError::at(lineno, format!("{cmd} 命令缺少右括号")));
+    // int(a,b[,p]) / float(a,b[,p]) 简单形式 -> Int/Float
+    if let Some(r) = is_range_call(rhs_toks, "int") {
+        if r.len() == 2 {
+            return Ok(VarKind::Int {
+                min: r[0].clone(),
+                max: r[1].clone(),
+            });
+        }
     }
-    Ok((cmd, &group[2..group.len() - 1]))
+    if let Some(r) = is_range_call(rhs_toks, "float") {
+        let prec = if r.len() == 3 { r[2].clone() } else { "6".to_string() };
+        return Ok(VarKind::Float {
+            min: r[0].clone(),
+            max: r[1].clone(),
+            prec,
+        });
+    }
+    // 其他标量表达式
+    let expr = expr_text(rhs_toks);
+    if expr.is_empty() {
+        return Err(DslError::at(lineno, "缺少表达式"));
+    }
+    let node = crate::expr::parse_expr(&expr).map_err(|e| e.with_line(lineno))?;
+    check_known_calls(&node).map_err(|e| e.with_line(lineno))?;
+    Ok(VarKind::Scalar { expr })
 }
 
 /// 解析单条语句行。`seen` 累积已定义变量名。
 ///
-/// 支持单赋值（`n = int(1, 100)`）与多值行（`a, b = int(1, 100), float(0, 1)`）。
+/// 一行 = 顶层逗号分隔的多个 `name = expr` 赋值：
+///   - `n = int(1, 100)`                     单赋值
+///   - `n = 2*m + 1`                          标量表达式
+///   - `n = int(1, 100), m = 2*n`             多赋值（一行输出多个数，每项可命名）
 fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> DslResult<Item> {
     let line = line.trim();
-    let eq = match line.find('=') {
-        Some(i) => i,
-        None => return Err(DslError::at(lineno, "语句缺少 '='")),
-    };
-    let lhs = line[..eq].trim();
-    let rhs = line[eq + 1..].trim();
-    let names: Vec<&str> = lhs.split(',').map(str::trim).collect();
-    if names.is_empty() || names.iter().any(|n| n.is_empty()) {
-        return Err(DslError::at(lineno, "缺少变量名"));
-    }
-    // 语句内部重名检测（a, a = ...）
-    let mut local: HashSet<String> = HashSet::new();
-    for name in &names {
-        if !local.insert(name.to_string()) {
-            return Err(DslError::at(lineno, format!("变量名重复：{name}")));
-        }
-        check_name(name, lineno, seen)?;
-    }
-    let toks = tokenize(rhs).map_err(|e| e.with_line(lineno))?;
-    // 顶层逗号把右侧切成若干命令调用组
+    let toks = tokenize(line).map_err(|e| e.with_line(lineno))?;
+
+    // 顶层逗号切分成若干个 `name = expr` 赋值组
     let groups = split_args(&toks);
-    let mut parsed: Vec<(String, VarKind)> = Vec::with_capacity(groups.len());
+    let mut assigns: Vec<(String, &[Tok])> = Vec::with_capacity(groups.len());
     for group in &groups {
-        let (cmd, inner) = group_cmd(group, lineno)?;
-        let kind = parse_cmd(cmd, inner).map_err(|e| e.with_line(lineno))?;
-        parsed.push((cmd.to_string(), kind));
+        if group.is_empty() {
+            return Err(DslError::at(lineno, "语句缺少 '='"));
+        }
+        // 组内找顶层 '='
+        let mut eq_idx: Option<usize> = None;
+        let mut depth = 0usize;
+        for (i, tok) in group.iter().enumerate() {
+            match tok {
+                Tok::Op(s) if s == "(" => depth += 1,
+                Tok::Op(s) if s == ")" => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                Tok::Op(s) if s == "=" && depth == 0 => {
+                    eq_idx = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let eq = match eq_idx {
+            Some(i) => i,
+            None => return Err(DslError::at(lineno, "语句缺少 '='")),
+        };
+        let name = expr_text(&group[..eq]);
+        if name.is_empty() {
+            return Err(DslError::at(lineno, "缺少变量名"));
+        }
+        check_name(&name, lineno, seen)?;
+        assigns.push((name, &group[eq + 1..]));
     }
 
-    // 单赋值：行为与 legacy 完全一致
-    if names.len() == 1 && parsed.len() == 1 {
-        let (_, kind) = parsed.pop().unwrap();
-        seen.insert(names[0].to_string());
+    // 语句内部重名检测
+    let mut local: HashSet<String> = HashSet::new();
+    for (name, _) in &assigns {
+        if !local.insert(name.clone()) {
+            return Err(DslError::at(lineno, format!("变量名重复：{name}")));
+        }
+    }
+
+    // 单赋值
+    if assigns.len() == 1 {
+        let (name, rhs) = assigns.pop().unwrap();
+        let kind = parse_assign(rhs, lineno)?;
+        seen.insert(name.clone());
         return Ok(Item {
-            name: names[0].to_string(),
+            name,
             kind,
             line: lineno,
         });
     }
 
-    // 多值行：名字与命令数量必须一致
-    if names.len() != parsed.len() {
-        return Err(DslError::at(
-            lineno,
-            format!(
-                "多值行左侧 {} 个变量名与右侧 {} 个命令数量不一致",
-                names.len(),
-                parsed.len()
-            ),
-        ));
-    }
-    let mut parts = Vec::with_capacity(names.len());
-    for (name, (cmd, kind)) in names.iter().zip(parsed) {
-        let part = match kind {
-            VarKind::Int { min, max } => MultiPart {
-                name: name.to_string(),
-                kind: ElemType::Int,
-                min,
-                max,
-                prec: "6".to_string(),
-            },
-            VarKind::Float { min, max, prec } => MultiPart {
-                name: name.to_string(),
-                kind: ElemType::Float,
-                min,
-                max,
-                prec,
-            },
-            _ => {
+    // 多赋值：每项必须是单行标量（命令限 int/float，其余按表达式）
+    let mut parts: Vec<MultiPart> = Vec::with_capacity(assigns.len());
+    for (name, rhs) in &assigns {
+        let kind = parse_assign(rhs, lineno)?;
+        let expr = match &kind {
+            VarKind::Int { min, max } => format!("int({min}, {max})"),
+            VarKind::Float { min, max, prec } => {
+                if prec == "6" {
+                    format!("float({min}, {max})")
+                } else {
+                    format!("float({min}, {max}, {prec})")
+                }
+            }
+            VarKind::Scalar { expr } => expr.clone(),
+            other => {
                 return Err(DslError::at(
                     lineno,
-                    format!("命令 {cmd} 不支持一行多值（仅支持 int / float）"),
+                    format!(
+                        "一行多个数时每项必须输出单个数值（{} 输出多行）",
+                        kind_name(other)
+                    ),
                 ));
             }
         };
-        parts.push(part);
+        parts.push(MultiPart {
+            name: name.clone(),
+            expr,
+        });
     }
-    for name in &names {
-        seen.insert(name.to_string());
+    for (name, _) in &assigns {
+        seen.insert(name.clone());
     }
     Ok(Item {
-        name: names.join(","),
+        name: assigns
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
         kind: VarKind::Multi { parts },
         line: lineno,
     })
+}
+
+/// 类型中文名（错误消息用）。
+fn kind_name(kind: &VarKind) -> &'static str {
+    match kind {
+        VarKind::Int { .. } => "整数",
+        VarKind::Float { .. } => "浮点",
+        VarKind::Multi { .. } => "多值",
+        VarKind::Scalar { .. } => "表达式",
+        VarKind::Array { .. } => "数组",
+        VarKind::Perm { .. } => "排列",
+        VarKind::String { .. } => "字符串",
+        VarKind::Binseq { .. } => "0/1 序列",
+        VarKind::Intervals { .. } => "区间",
+        VarKind::Points { .. } => "点集",
+        VarKind::Tree { .. } => "树",
+        VarKind::Graph { .. } => "图",
+    }
 }
 
 /// 从 DSL 文本顶部读取多测模式注释。

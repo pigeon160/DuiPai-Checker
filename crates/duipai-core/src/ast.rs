@@ -70,14 +70,12 @@ pub struct Weight {
     pub prec: String,
 }
 
-/// 多值行中的单个标量 part（int/float，输出一行多个数，可各自命名）。
+/// 一行多赋值中的单个项：`n = int(1, 100), m = 2*n` 中一个 name = expr。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MultiPart {
     pub name: String,
-    pub kind: ElemType,
-    pub min: String,
-    pub max: String,
-    pub prec: String,
+    /// 标量表达式原文（int()/float() 随机调用、算术、引用均可）
+    pub expr: String,
 }
 
 /// 变量类型与参数（字段均为表达式字符串，bool 除外）。
@@ -85,8 +83,10 @@ pub struct MultiPart {
 pub enum VarKind {
     /// 整数变量：`n = int(min, max)`
     Int { min: String, max: String },
-    /// 多值行：`a, b = int(1, 100), float(0, 1)`——一行输出多个数，各自可命名可引用
+    /// 多赋值：`n = int(1, 100), m = 2*n`——一行多个数，每项 name = expr
     Multi { parts: Vec<MultiPart> },
+    /// 标量表达式绑定：`n = 2*m + 1`（任意表达式，值可被引用）
+    Scalar { expr: String },
     /// 浮点变量：`x = float(min, max[, prec])`
     Float { min: String, max: String, prec: String },
     /// 数组/矩阵：`ints/floats(cols, el_min, el_max[, prec])` 或

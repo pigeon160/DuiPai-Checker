@@ -45,26 +45,13 @@ pub fn line_for(item: &Item) -> DslResult<String> {
     let line = match &item.kind {
         VarKind::Int { min, max } => format!("{name} = int({min}, {max})"),
         VarKind::Multi { parts } => {
-            let lhs = parts
+            let assigns: Vec<String> = parts
                 .iter()
-                .map(|p| p.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let rhs = parts
-                .iter()
-                .map(|p| {
-                    if p.kind == ElemType::Int {
-                        format!("int({}, {})", p.min, p.max)
-                    } else if p.prec == "6" {
-                        format!("float({}, {})", p.min, p.max)
-                    } else {
-                        format!("float({}, {}, {})", p.min, p.max, p.prec)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{lhs} = {rhs}")
+                .map(|p| format!("{} = {}", p.name, p.expr))
+                .collect();
+            assigns.join(", ")
         }
+        VarKind::Scalar { expr } => format!("{name} = {expr}"),
         VarKind::Float { min, max, prec } => {
             if prec == "6" {
                 format!("{name} = float({min}, {max})")

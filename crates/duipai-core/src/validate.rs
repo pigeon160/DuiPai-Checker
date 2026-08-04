@@ -18,6 +18,7 @@ fn is_refable(kind: &VarKind) -> bool {
         VarKind::Int { .. }
             | VarKind::Float { .. }
             | VarKind::Multi { .. }
+            | VarKind::Scalar { .. }
             | VarKind::Perm { .. }
             | VarKind::Tree { .. }
             | VarKind::Graph { .. }
@@ -118,17 +119,14 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                 check_lo_hi(min, max, "整数变量范围", "整数变量范围最小值不能大于最大值", &mut errors, line);
             }
             VarKind::Multi { parts } => {
+                // 逐 part 检查并渐进登记名字：同一行内后者可引用前者
                 for p in parts {
-                    let label = if p.kind == ElemType::Int { "整数变量范围" } else { "浮点数变量范围" };
-                    let prec_label = "浮点精度";
-                    check_field(&p.min, label, &types, &mut errors, line);
-                    check_field(&p.max, label, &types, &mut errors, line);
-                    check_lo_hi(&p.min, &p.max, label, format!("{label}最小值不能大于最大值").as_str(), &mut errors, line);
-                    if p.kind == ElemType::Float {
-                        check_field(&p.prec, prec_label, &types, &mut errors, line);
-                        check_const(&p.prec, prec_label, "浮点数变量精度应在 0~15 之间", |v| (0.0..=15.0).contains(&v), &mut errors, line);
-                    }
+                    check_field(&p.expr, "", &types, &mut errors, line);
+                    types.insert(p.name.clone(), kind.clone());
                 }
+            }
+            VarKind::Scalar { expr } => {
+                check_field(expr, "", &types, &mut errors, line);
             }
             VarKind::Float { min, max, prec } => {
                 check_field(min, "浮点数变量范围", &types, &mut errors, line);

@@ -6,17 +6,7 @@ export type { VarKind };
 export const KIND_ORDER: { kind: VarKind; label: string }[] = [
   { kind: { Int: { min: "1", max: "100" } }, label: "整数变量" },
   { kind: { Float: { min: "0", max: "1", prec: "6" } }, label: "浮点变量" },
-  {
-    kind: {
-      Multi: {
-        parts: [
-          { name: "a", kind: "Int", min: "1", max: "100", prec: "6" },
-          { name: "b", kind: "Int", min: "1", max: "100", prec: "6" },
-        ],
-      },
-    },
-    label: "多值行（一行多个数）",
-  },
+  { kind: { Scalar: { expr: "int(1, 100)" } }, label: "表达式变量" },
   {
     kind: {
       Array: {
@@ -49,7 +39,8 @@ export function kindLabel(kind: VarKind): string {
   switch (key) {
     case "Int": return "整数变量";
     case "Float": return "浮点变量";
-    case "Multi": return "多值行";
+    case "Multi": return "多赋值";
+    case "Scalar": return "表达式变量";
     case "Array": return (k.Array as { elem_type: ElemType }).elem_type === "Int" ? "整数数组" : "浮点数组";
     case "Perm": return "排列";
     case "String": return "字符串";
@@ -135,6 +126,10 @@ export function kindFields(kind: VarKind): F[] {
     case "Tree": {
       const v = k.Tree as { n: string };
       return [{ key: "n", label: "顶点数", ph: v.n }];
+    }
+    case "Scalar": {
+      const v = k.Scalar as { expr: string };
+      return [{ key: "expr", label: "表达式", ph: v.expr }];
     }
     case "Graph": {
       const v = k.Graph as { n: string; m: string };

@@ -242,6 +242,10 @@ select {
   width: 60px;
 }
 
+.field-input.expr-input {
+  width: 180px;
+}
+
 .name-input {
   width: 90px;
 }

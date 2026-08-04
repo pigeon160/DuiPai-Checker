@@ -100,7 +100,7 @@ function TextFields({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => v
   );
 }
 
-/** 多值行表单：每个 part 独立命名 + 类型 + 范围。 */
+/** 多赋值表单：每项 name + expr。 */
 function MultiForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => void }) {
   const parts = (kind as { Multi: { parts: MultiPart[] } }).Multi.parts;
   const setParts = (parts: MultiPart[]) =>
@@ -118,49 +118,16 @@ function MultiForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => vo
             placeholder={`名${i + 1}`}
             spellCheck={false}
           />
-          <select
-            value={p.kind}
-            title={`第 ${i + 1} 个数类型`}
-            onChange={(e) =>
-              setParts(
-                parts.map((q, j) =>
-                  j === i ? { ...q, kind: e.target.value as ElemType } : q,
-                ),
-              )
-            }
-          >
-            <option value="Int">整数</option>
-            <option value="Float">浮点</option>
-          </select>
           <input
-            className="field-input small"
-            title={`第 ${i + 1} 个数最小值`}
-            value={p.min}
+            className="field-input expr-input"
+            title={`第 ${i + 1} 个数表达式（int()/float()/算术/引用均可）`}
+            value={p.expr}
             onChange={(e) =>
-              setParts(parts.map((q, j) => (j === i ? { ...q, min: e.target.value } : q)))
+              setParts(parts.map((q, j) => (j === i ? { ...q, expr: e.target.value } : q)))
             }
-            placeholder="min"
+            placeholder="int(1, 100)"
+            spellCheck={false}
           />
-          <input
-            className="field-input small"
-            title={`第 ${i + 1} 个数最大值`}
-            value={p.max}
-            onChange={(e) =>
-              setParts(parts.map((q, j) => (j === i ? { ...q, max: e.target.value } : q)))
-            }
-            placeholder="max"
-          />
-          {p.kind === "Float" && (
-            <input
-              className="field-input small"
-              title={`第 ${i + 1} 个数精度`}
-              value={p.prec}
-              onChange={(e) =>
-                setParts(parts.map((q, j) => (j === i ? { ...q, prec: e.target.value } : q)))
-              }
-              placeholder="prec"
-            />
-          )}
           <button
             className="del-btn"
             onClick={() => setParts(parts.filter((_, j) => j !== i))}
@@ -174,7 +141,7 @@ function MultiForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => vo
         onClick={() =>
           setParts([
             ...parts,
-            { name: "", kind: "Int", min: "1", max: "100", prec: "6" },
+            { name: "", expr: parts[0]?.expr ?? "int(1, 100)" },
           ])
         }
       >
@@ -182,6 +149,30 @@ function MultiForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => vo
       </button>
     </>
   );
+}
+
+/** 单值类型 → 表达式文本（多名字转换用）；多行类型返回 null。 */
+function kindToExpr(kind: VarKind): string | null {
+  const k = kind as Record<string, unknown>;
+  switch (Object.keys(kind)[0]) {
+    case "Int": {
+      const v = k.Int as { min: string; max: string };
+      return `int(${v.min}, ${v.max})`;
+    }
+    case "Float": {
+      const v = k.Float as { min: string; max: string; prec: string };
+      return v.prec === "6" ? `float(${v.min}, ${v.max})` : `float(${v.min}, ${v.max}, ${v.prec})`;
+    }
+    case "Scalar": {
+      return (k.Scalar as { expr: string }).expr;
+    }
+    case "Multi": {
+      const parts = (k.Multi as { parts: MultiPart[] }).parts;
+      return parts[0]?.expr ?? null;
+    }
+    default:
+      return null;
+  }
 }
 
 function KindForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => void }) {
@@ -277,6 +268,34 @@ function KindForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => voi
 }
 
 export default function VariableRow({ item, dragging, onName, onKind, onDelete, dragProps }: Props) {
+  const isMulti = Object.keys(item.kind)[0] === "Multi";
+  const multiParts = isMulti
+    ? (item.kind as { Multi: { parts: MultiPart[] } }).Multi.parts
+    : [];
+
+  /** 名称框变更：多个名字（空格分隔）自动转为多赋值，单名字转回表达式变量 */
+  const handleNameChange = (raw: string) => {
+    const names = raw.split(/\s+/).filter(Boolean);
+    if (isMulti) {
+      if (names.length > 1) {
+        const next = names.map((n, i) =>
+          i < multiParts.length ? { ...multiParts[i], name: n } : { name: n, expr: multiParts[0]?.expr ?? "int(1, 100)" },
+        );
+        onKind({ Multi: { parts: next } } as unknown as VarKind);
+      } else if (names.length === 1) {
+        onKind({ Scalar: { expr: multiParts[0]?.expr ?? "" } } as unknown as VarKind);
+      }
+      return;
+    }
+    if (names.length > 1) {
+      const expr = kindToExpr(item.kind);
+      if (expr === null) return; // 多行类型不支持一行多值，忽略改名
+      onKind({ Multi: { parts: names.map((n) => ({ name: n, expr })) } } as unknown as VarKind);
+      return;
+    }
+    onName(raw);
+  };
+
   return (
     <div
       className={`var-row${dragging ? " dragging" : ""}`}
@@ -286,9 +305,10 @@ export default function VariableRow({ item, dragging, onName, onKind, onDelete, 
       <span className="drag-handle" title="拖拽排序">⠿</span>
       <input
         className="name-input"
-        value={item.name}
-        onChange={(e) => onName(e.target.value)}
-        placeholder="变量名"
+        value={isMulti ? multiParts.map((p) => p.name).join(" ") : item.name}
+        onChange={(e) => handleNameChange(e.target.value)}
+        placeholder={isMulti ? "多个名字（空格分隔）" : "变量名"}
+        title={isMulti ? "空格分隔多个名字，每名一个数" : "可输入多个名字（空格分隔）实现一行多个数"}
         spellCheck={false}
       />
       <span className="kind-badge">{kindLabel(item.kind)}</span>
