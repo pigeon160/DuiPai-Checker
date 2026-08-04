@@ -75,13 +75,15 @@ export interface Item {
   line: number;
 }
 
-export interface RepeatMode {
-  enabled: boolean;
+export interface RepeatBlock {
+  /** 重复次数表达式（常量，如 "3"、"2*3"）。 */
   count: string;
+  /** 块内语句。 */
+  items: Item[];
 }
 
 export interface Config {
-  repeat: RepeatMode | null;
+  repeat: RepeatBlock | null;
   items: Item[];
 }
 

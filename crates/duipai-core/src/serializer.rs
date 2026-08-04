@@ -1,12 +1,11 @@
 //! IR -> DSL 文本（规范化）。
 //!
-//! 输出为规范化文本：行块 `行 (N):` + 缩进子项；命令每行一条；多测模式首行注释。
+//! 输出为规范化文本：`repeat (N):` 块（缩进子语句）、行块 `行 (N):` + 缩进子项；
+//! 命令每行一条。
 
 use crate::ast::{Config, ElemType, GraphType, Item, LineItemKind, VarKind, Weight};
 use crate::error::DslResult;
 use crate::expr::{parse_expr, ExprNode};
-
-const REPEAT_COMMENT: &str = "多测模式";
 
 /// 把 min/max 字段格式化为 int(a,b) / float(a,b,prec) 形式。
 fn fmt_range(item: &Weight) -> String {
@@ -183,8 +182,12 @@ pub fn lines_for(item: &Item) -> DslResult<Vec<String>> {
 pub fn serialize(config: &Config) -> DslResult<String> {
     let mut out: Vec<String> = Vec::new();
     if let Some(repeat) = &config.repeat {
-        if repeat.enabled {
-            out.push(format!("# {REPEAT_COMMENT}：重复 {} 次", repeat.count));
+        out.push(format!("repeat ({}):", repeat.count));
+        for item in &repeat.items {
+            let sub = lines_for(item)?;
+            for l in sub {
+                out.push(format!("    {l}"));
+            }
         }
     }
     for item in &config.items {

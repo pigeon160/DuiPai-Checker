@@ -98,6 +98,8 @@ struct Parsed {
     hit: bool,
     /// 是否有默认推断（拉低置信度）。
     defaults: bool,
+    /// 多测（repeat 块）计数变量名。
+    repeat_var: Option<String>,
 }
 
 impl Parsed {
@@ -765,7 +767,7 @@ fn rule_convert(text: &str) -> Option<Parsed> {
                 },
             );
         }
-        p.blocks.insert(0, Block::Cmd(format!("# 多测模式：重复 {v} 次")));
+        p.repeat_var = Some(v.clone());
     }
 
     if !p.hit {
@@ -854,6 +856,14 @@ fn render(p: &Parsed) -> String {
                 }
             }
         }
+    }
+    // 多测（repeat 块）：所有块缩进 4 空格，头部 repeat (t):
+    if let Some(v) = &p.repeat_var {
+        let mut indented = vec![format!("repeat ({v}):")];
+        for l in out {
+            indented.push(format!("    {l}"));
+        }
+        out = indented;
     }
     out.join("\n")
 }
@@ -954,9 +964,10 @@ mod tests {
     #[test]
     fn multi_test_first_line() {
         let r = conv("多测，T 组。第一行一个整数 n (1<=n<=10^5)，接下来 n 行每行一个整数 x");
-        assert!(r.dsl.starts_with("# 多测模式：重复 t 次"), "{}", r.dsl);
+        eprintln!("MTFL dsl={:?} warn={:?} conf={}", r.dsl, r.warnings, r.confidence);
+        assert!(r.dsl.starts_with("repeat (t):"), "{}", r.dsl);
         assert!(r.dsl.contains("int n: 1, 100000"), "{}", r.dsl);
-        assert!(r.dsl.contains("line (n):\n    int x: 1, 100"), "{}", r.dsl);
+        assert!(r.dsl.contains("    line (n):\n        int x: 1, 100"), "{}", r.dsl);
     }
 
     #[test]
@@ -1050,7 +1061,7 @@ mod tests {
     #[test]
     fn multi_test_with_explicit_t() {
         let r = conv("第一行一个整数 T (1<=T<=10)，接下来 T 组，每组第一行一个整数 n，然后 n 行每行一个整数");
-        assert!(r.dsl.starts_with("# 多测模式：重复 t 次"), "{}", r.dsl);
+        assert!(r.dsl.starts_with("repeat (t):"), "{}", r.dsl);
         assert!(r.dsl.contains("int t: 1, 10"), "{}", r.dsl);
         assert!(r.dsl.contains("line (n):"), "{}", r.dsl);
     }

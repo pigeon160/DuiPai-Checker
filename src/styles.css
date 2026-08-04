@@ -809,3 +809,10 @@ input.invalid,
 .nl-model-path { flex: 1 1 260px; min-width: 0; }
 .nl-model-msg { display: block; margin-top: 6px; }
 .nl-model-hint { margin: 8px 0 0; font-size: 12px; color: var(--text-2); line-height: 1.6; }
+.move-btns { display: inline-flex; flex-direction: column; gap: 2px; margin-right: 4px; align-self: flex-start; }
+.move-btn {
+  width: 22px; height: 16px; padding: 0; font-size: 11px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.move-btn:disabled { opacity: 0.35; cursor: default; }
+.repeat-box { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }

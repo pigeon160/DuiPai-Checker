@@ -15,7 +15,7 @@ pub mod serializer;
 pub mod validate;
 
 pub use ast::{
-    Config, ElemType, GraphType, Item, LineItem, LineItemKind, RepeatMode, TreeType, VarKind,
+    Config, ElemType, GraphType, Item, LineItem, LineItemKind, RepeatBlock, TreeType, VarKind,
     Weight,
 };
 pub use check::{

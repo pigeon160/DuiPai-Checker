@@ -9,6 +9,7 @@ import {
   type GenMode,
   type Item,
   type ProgramSpec,
+  type RepeatBlock,
 } from "./api";
 import { registerDslLanguage } from "./dslLanguage";
 import DslEditor from "./components/DslEditor";
@@ -37,8 +38,7 @@ export default function App() {
   const [status, setStatus] = useState("正在连接后端……");
   const [dsl, setDsl] = useState(SAMPLE_DSL);
   const [items, setItems] = useState<Item[]>([]);
-  const [repeatEnabled, setRepeatEnabled] = useState(false);
-  const [repeatCount, setRepeatCount] = useState("1");
+  const [repeat, setRepeat] = useState<RepeatBlock | null>(null);
   const [errors, setErrors] = useState<DslError[]>([]);
   const [editorFocused, setEditorFocused] = useState(false);
   const [ready, setReady] = useState(false);
@@ -113,8 +113,7 @@ export default function App() {
     dslParseChecked(SAMPLE_DSL)
       .then((r) => {
         setItems(r.config.items);
-        setRepeatEnabled(r.config.repeat?.enabled ?? false);
-        setRepeatCount(r.config.repeat?.count ?? "1");
+        setRepeat(r.config.repeat);
         setErrors(r.errors);
       })
       .catch(() => {})
@@ -126,10 +125,7 @@ export default function App() {
     if (!ready || editorFocused) return;
     const t = setTimeout(async () => {
       try {
-        const cfg: Config = {
-          repeat: repeatEnabled ? { enabled: true, count: repeatCount } : null,
-          items,
-        };
+        const cfg: Config = { repeat, items };
         const text = await dslSerialize(cfg);
         if (text !== dslRef.current) setDsl(text);
       } catch {
@@ -137,7 +133,7 @@ export default function App() {
       }
     }, 200);
     return () => clearTimeout(t);
-  }, [items, repeatEnabled, repeatCount, editorFocused, ready]);
+  }, [items, repeat, editorFocused, ready]);
 
   // 实时校验（DSL 文本变化后防抖 400ms，仅更新错误标记，不动 GUI）
   useEffect(() => {
@@ -160,8 +156,7 @@ export default function App() {
     try {
       const r = await dslParseChecked(dsl);
       setItems(r.config.items);
-      setRepeatEnabled(r.config.repeat?.enabled ?? false);
-      setRepeatCount(r.config.repeat?.count ?? "1");
+      setRepeat(r.config.repeat);
       setErrors(r.errors);
     } catch (e) {
       setErrors([e as DslError]);
@@ -172,10 +167,7 @@ export default function App() {
 
   const clean = errors.length === 0;
 
-  const buildConfig = (): Config => ({
-    repeat: repeatEnabled ? { enabled: true, count: repeatCount } : null,
-    items,
-  });
+  const buildConfig = (): Config => ({ repeat, items });
 
   return (
     <div className="app">
@@ -197,11 +189,9 @@ export default function App() {
         >
           <VariableList
             items={items}
-            repeatEnabled={repeatEnabled}
-            repeatCount={repeatCount}
+            repeat={repeat}
             onChangeItems={setItems}
-            onToggleRepeat={setRepeatEnabled}
-            onChangeRepeatCount={setRepeatCount}
+            onChangeRepeat={setRepeat}
           />
         </Panel>
         <SplitHandle

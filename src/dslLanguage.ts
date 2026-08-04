@@ -10,6 +10,10 @@ const COMMANDS = [
 
 /** 命令补全模板（insertText 用 tabstop 语法）。 */
 const SNIPPETS: Record<string, { body: string; doc: string }> = {
+  repeat: {
+    body: "repeat (${1:N}):\n    ${2:line}:\n        ${3:int} ${4:n}: ${5:1}, ${6:100}",
+    doc: "repeat 块：整体重复 N 次，变量每轮覆盖（优先级最高）",
+  },
   line: { body: "line:\n    ${1:int} ${2:n}: ${3:1}, ${4:100}", doc: "行块：一行多个数（可重复）" },
   int: { body: "int ${1:n}: ${2:1}, ${3:100}", doc: "行内整数项" },
   float: { body: "float ${1:x}: ${2:0}, ${3:1}, ${4:prec}", doc: "行内浮点项" },

@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    Config, ElemType, GraphType, Item, LineItem, LineItemKind, RepeatMode, VarKind, Weight,
+    Config, ElemType, GraphType, Item, LineItem, LineItemKind, RepeatBlock, VarKind, Weight,
 };
 use crate::error::{DslError, DslResult};
 use crate::expr::{tokenize, Tok};
@@ -36,8 +36,6 @@ pub const KNOWN_COMMANDS: &[&str] = &[
     "tree", "graph", "ring", "base_ring", "repeat",
     "line", "int", "float", "text", "expr", "str",
 ];
-
-const REPEAT_COMMENT: &str = "多测模式";
 
 const DEFAULT_CHARSET: &str = "abcdefghijklmnopqrstuvwxyz";
 
@@ -551,9 +549,13 @@ fn parse_line_item(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
 }
 
 /// 解析行块：`行 (N):` + 缩进子项。返回 (Item, 消费的行数)。
+///
+/// `base_indent` 为声明行的缩进（顶层 0；repeat 块内为其子语句缩进），
+/// 子项必须缩进更深；缩进等于或小于 base 的行属于外层（结束本块）。
 fn parse_line_block(
     lines: &[&str],
     start: usize,
+    base_indent: usize,
     seen: &mut HashSet<String>,
 ) -> DslResult<(Item, usize)> {
     let lineno = start + 1;
@@ -601,7 +603,7 @@ fn parse_line_block(
         return Err(DslError::at(lineno, "行块声明行有多余内容"));
     }
 
-    // 缩进子项
+    // 缩进子项（必须比声明行缩进更深）
     let mut items: Vec<LineItem> = Vec::new();
     let mut i = start + 1;
     while i < lines.len() {
@@ -611,7 +613,7 @@ fn parse_line_block(
             continue;
         }
         let indent = raw.len() - raw.trim_start_matches(' ').len();
-        if indent == 0 {
+        if indent <= base_indent {
             break;
         }
         items.push(parse_line_item(raw.trim(), i + 1, seen)?);
@@ -716,60 +718,16 @@ fn parse_statement(line: &str, lineno: usize, seen: &mut HashSet<String>) -> Dsl
     ))
 }
 
-/// 从 DSL 文本顶部读取多测模式注释。
-/// 识别 `# 多测模式`、`# 多测模式：重复 3 次`（冒号中英文均可）。
-fn parse_repeat(lines: &[&str]) -> Option<RepeatMode> {
-    for raw in lines.iter().take(8) {
-        let s = raw.trim();
-        if !s.starts_with('#') {
-            continue;
-        }
-        let body = s.trim_start_matches('#').trim();
-        if body == REPEAT_COMMENT {
-            return Some(RepeatMode {
-                enabled: true,
-                count: "1".to_string(),
-            });
-        }
-        let rest = body
-            .strip_prefix(REPEAT_COMMENT)
-            .and_then(|r| {
-                let r = r.strip_prefix('：').or_else(|| r.strip_prefix(':'));
-                r.map(|x| x.trim())
-            });
-        if let Some(rest) = rest {
-            if let Some(count) = parse_repeat_count(rest) {
-                return Some(RepeatMode {
-                    enabled: true,
-                    count,
-                });
-            }
-        }
-    }
-    None
-}
-
-/// 解析 `重复 N 次?`（对应 legacy 正则 `重复\s*(\d+)\s*次?`）。
-fn parse_repeat_count(rest: &str) -> Option<String> {
-    let rest = rest.strip_prefix("重复")?.trim_start();
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return None;
-    }
-    let after = rest[digits.len()..].trim_start();
-    if after == "次" || after.is_empty() {
-        Some(digits)
-    } else {
-        None
-    }
-}
-
 /// 解析 DSL 文本，返回 IR 配置；语法/语义错误带行号。
+///
+/// 顶层结构：
+/// - `repeat (N):` 块：唯一且包裹全部语句（缩进子块），优先级最高
+/// - 行块 / 顶层命令（repeat 之外）
 pub fn parse(text: &str) -> DslResult<Config> {
     let lines: Vec<&str> = text.lines().collect();
-    let repeat = parse_repeat(&lines);
     let mut items: Vec<Item> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut repeat: Option<RepeatBlock> = None;
     let mut i = 0usize;
     while i < lines.len() {
         let raw = lines[i];
@@ -781,12 +739,34 @@ pub fn parse(text: &str) -> DslResult<Config> {
         if indent > 0 {
             return Err(DslError::at(
                 i + 1,
-                "缩进不正确：顶层语句不能缩进（行块子项除外）",
+                "缩进不正确：顶层语句不能缩进（repeat 块或行块子项除外）",
             ));
         }
         let toks = tokenize(raw.trim()).map_err(|e| e.with_line(i + 1))?;
+        if matches!(toks.first(), Some(Tok::Name(k)) if k == "repeat") {
+            if repeat.is_some() {
+                return Err(DslError::at(i + 1, "repeat 块只能出现一次"));
+            }
+            if !items.is_empty() {
+                return Err(DslError::at(
+                    i + 1,
+                    "repeat 块必须放在最前（优先级高于其他所有语句）",
+                ));
+            }
+            let (block, consumed) = parse_repeat_block(&lines, i, &mut seen)?;
+            repeat = Some(block);
+            i += consumed;
+            continue;
+        }
+        if repeat.is_some() {
+            // repeat 块后不允许其他顶层语句
+            return Err(DslError::at(
+                i + 1,
+                "repeat 块必须包裹全部语句（块后不允许其他顶层语句）",
+            ));
+        }
         if matches!(toks.first(), Some(Tok::Name(k)) if k == LINE_KEYWORD) {
-            let (item, consumed) = parse_line_block(&lines, i, &mut seen)?;
+            let (item, consumed) = parse_line_block(&lines, i, 0, &mut seen)?;
             items.push(item);
             i += consumed;
         } else {
@@ -795,4 +775,92 @@ pub fn parse(text: &str) -> DslResult<Config> {
         }
     }
     Ok(Config { repeat, items })
+}
+
+/// 解析 repeat 块：`repeat (N):` + 缩进子语句。
+/// 返回 (RepeatBlock, 消费的行数)。
+fn parse_repeat_block(
+    lines: &[&str],
+    start: usize,
+    seen: &mut HashSet<String>,
+) -> DslResult<(RepeatBlock, usize)> {
+    let lineno = start + 1;
+    let toks = tokenize(lines[start]).map_err(|e| e.with_line(lineno))?;
+    // repeat [ ( N ) ] :
+    let mut p = 1usize;
+    let mut count = "1".to_string();
+    if matches!(toks.get(p), Some(Tok::Op(s)) if s == "(") {
+        p += 1;
+        let mut depth = 1usize;
+        let mut inner: Vec<Tok> = Vec::new();
+        while p < toks.len() {
+            match &toks[p] {
+                Tok::Op(s) if s == "(" => {
+                    depth += 1;
+                    inner.push(toks[p].clone());
+                }
+                Tok::Op(s) if s == ")" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    inner.push(toks[p].clone());
+                }
+                t => inner.push(t.clone()),
+            }
+            p += 1;
+        }
+        if depth != 0 {
+            return Err(DslError::at(lineno, "repeat 重复次数表达式缺少右括号"));
+        }
+        let count_expr = expr_text(&inner);
+        if count_expr.is_empty() {
+            return Err(DslError::at(lineno, "repeat 重复次数表达式为空（repeat (N):）"));
+        }
+        let node = crate::expr::parse_expr(&count_expr).map_err(|e| e.with_line(lineno))?;
+        check_known_calls(&node).map_err(|e| e.with_line(lineno))?;
+        count = count_expr;
+        p += 1; // 跳过 ')'
+    }
+    if !matches!(toks.get(p), Some(Tok::Op(s)) if s == ":") {
+        return Err(DslError::at(lineno, "repeat 块必须以「repeat (N):」开头"));
+    }
+    if p + 1 != toks.len() {
+        return Err(DslError::at(lineno, "repeat 块声明行有多余内容"));
+    }
+
+    // 缩进子语句（行块 / 顶层命令）
+    let mut items: Vec<Item> = Vec::new();
+    let mut i = start + 1;
+    while i < lines.len() {
+        let raw = lines[i];
+        if raw.trim().is_empty() || raw.trim_start().starts_with('#') {
+            i += 1;
+            continue;
+        }
+        let indent = raw.len() - raw.trim_start_matches(' ').len();
+        if indent == 0 {
+            break;
+        }
+        let sub = raw.trim();
+        let sub_toks = tokenize(sub).map_err(|e| e.with_line(i + 1))?;
+        if matches!(sub_toks.first(), Some(Tok::Name(k)) if k == "repeat") {
+            return Err(DslError::at(i + 1, "repeat 块不能嵌套"));
+        }
+        if matches!(sub_toks.first(), Some(Tok::Name(k)) if k == LINE_KEYWORD) {
+            let (item, consumed) = parse_line_block(&lines, i, indent, seen)?;
+            items.push(item);
+            i += consumed;
+        } else {
+            items.push(parse_statement(sub, i + 1, seen)?);
+            i += 1;
+        }
+    }
+    if items.is_empty() {
+        return Err(DslError::at(
+            lineno,
+            "repeat 块内至少需要一个语句（行块或命令）",
+        ));
+    }
+    Ok((RepeatBlock { count, items }, i - start))
 }

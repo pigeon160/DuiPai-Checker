@@ -289,15 +289,43 @@ fn check_line_item(
 /// 校验一份配置，返回错误列表（每个错误带行号）。
 pub fn validate(config: &Config) -> Vec<DslError> {
     let mut errors: Vec<DslError> = Vec::new();
+    if let Some(rep) = &config.repeat {
+        // repeat 块：重复次数常量 >= 1（无外部变量可引用）
+        let mut rng = StdRng::seed_from_u64(0);
+        match parse_expr(&rep.count) {
+            Ok(node) => {
+                let mut names = Vec::new();
+                collect_names(&node, &mut names);
+                if !names.is_empty() {
+                    errors.push(DslError::at(
+                        0,
+                        "repeat 重复次数表达式不能引用变量（块内无外部变量）",
+                    ));
+                } else if let Ok(v) = eval_node(&node, &HashMap::new(), &mut rng) {
+                    if v < 1.0 {
+                        errors.push(DslError::at(0, "repeat 重复次数应 >= 1"));
+                    }
+                }
+            }
+            Err(e) => errors.push(DslError::at(0, format!("repeat 重复次数表达式错误：{}", e.message))),
+        }
+        validate_items(&rep.items, &mut errors);
+    }
+    validate_items(&config.items, &mut errors);
+    errors
+}
+
+/// 校验语句列表（repeat 块 / 顶层共用）。
+fn validate_items(items: &[crate::ast::Item], errors: &mut Vec<DslError>) {
     let mut types: HashMap<String, VarKind> = HashMap::new();
-    for item in &config.items {
+    for item in items {
         let line = item.line;
         let kind = &item.kind;
         match kind {
             VarKind::Line { rows, items } => {
                 // 逐项检查并渐进登记名字：同一行内后者可引用前者（按当前行标量语义）
                 for it in items {
-                    check_line_item(it, &types, &mut errors, line);
+                    check_line_item(it, &types, &mut *errors, line);
                     types.insert(
                         it.name.clone(),
                         VarKind::Line {
@@ -310,33 +338,33 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                 for it in items {
                     types.insert(it.name.clone(), kind.clone());
                 }
-                check_field(rows, "重复行数", &types, &mut errors, line);
-                check_const(rows, "重复行数", "重复行数不能小于 1", |v| v >= 1.0, &mut errors, line);
+                check_field(rows, "重复行数", &types, &mut *errors, line);
+                check_const(rows, "重复行数", "重复行数不能小于 1", |v| v >= 1.0, &mut *errors, line);
             }
             VarKind::Array { elem_type, el_min, el_max, prec, rows, cols } => {
                 let is_float = *elem_type == ElemType::Float;
                 let range_label = "数组元素范围";
                 let prec_label = "数组元素精度";
-                check_field(el_min, range_label, &types, &mut errors, line);
-                check_field(el_max, range_label, &types, &mut errors, line);
-                check_field(prec, prec_label, &types, &mut errors, line);
-                check_field(rows, "数组行数", &types, &mut errors, line);
-                check_field(cols, "数组每行长度", &types, &mut errors, line);
-                check_lo_hi(el_min, el_max, range_label, "数组元素范围最小值不能大于最大值", &mut errors, line);
+                check_field(el_min, range_label, &types, &mut *errors, line);
+                check_field(el_max, range_label, &types, &mut *errors, line);
+                check_field(prec, prec_label, &types, &mut *errors, line);
+                check_field(rows, "数组行数", &types, &mut *errors, line);
+                check_field(cols, "数组每行长度", &types, &mut *errors, line);
+                check_lo_hi(el_min, el_max, range_label, "数组元素范围最小值不能大于最大值", &mut *errors, line);
                 if is_float {
-                    check_const(prec, prec_label, "数组元素精度应在 0~15 之间", |v| (0.0..=15.0).contains(&v), &mut errors, line);
+                    check_const(prec, prec_label, "数组元素精度应在 0~15 之间", |v| (0.0..=15.0).contains(&v), &mut *errors, line);
                 }
-                check_const(rows, "数组行数", "数组行数不能小于 1", |v| v >= 1.0, &mut errors, line);
-                check_const(cols, "数组每行长度", "数组每行长度不能为负", |v| v >= 0.0, &mut errors, line);
+                check_const(rows, "数组行数", "数组行数不能小于 1", |v| v >= 1.0, &mut *errors, line);
+                check_const(cols, "数组每行长度", "数组每行长度不能为负", |v| v >= 0.0, &mut *errors, line);
             }
             VarKind::Perm { n } => {
-                check_field(n, "排列长度", &types, &mut errors, line);
-                check_const(n, "排列长度", "排列长度 n 应 >= 1", |v| v >= 1.0, &mut errors, line);
+                check_field(n, "排列长度", &types, &mut *errors, line);
+                check_const(n, "排列长度", "排列长度 n 应 >= 1", |v| v >= 1.0, &mut *errors, line);
             }
             VarKind::Binseq { n, k } => {
-                check_field(n, "0/1序列长度", &types, &mut errors, line);
-                check_field(k, "0/1序列中1的个数", &types, &mut errors, line);
-                check_const(n, "0/1序列长度", "0/1序列长度不能为负", |v| v >= 0.0, &mut errors, line);
+                check_field(n, "0/1序列长度", &types, &mut *errors, line);
+                check_field(k, "0/1序列中1的个数", &types, &mut *errors, line);
+                check_const(n, "0/1序列长度", "0/1序列长度不能为负", |v| v >= 0.0, &mut *errors, line);
                 match (try_const(n), try_const(k)) {
                     (Ok(Some(nv)), Ok(Some(kv))) if !(0.0..=nv).contains(&kv) => {
                         errors.push(DslError::at(line, "1 的个数 k 应在 0~n 之间"));
@@ -347,19 +375,19 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                 }
             }
             VarKind::Intervals { n, lo, hi } => {
-                check_field(n, "区间个数", &types, &mut errors, line);
-                check_field(lo, "区间下界", &types, &mut errors, line);
-                check_field(hi, "区间上界", &types, &mut errors, line);
-                check_const(n, "区间个数", "区间个数不能为负", |v| v >= 0.0, &mut errors, line);
-                check_lo_hi(lo, hi, "区间范围", "区间下界不能大于上界", &mut errors, line);
+                check_field(n, "区间个数", &types, &mut *errors, line);
+                check_field(lo, "区间下界", &types, &mut *errors, line);
+                check_field(hi, "区间上界", &types, &mut *errors, line);
+                check_const(n, "区间个数", "区间个数不能为负", |v| v >= 0.0, &mut *errors, line);
+                check_lo_hi(lo, hi, "区间范围", "区间下界不能大于上界", &mut *errors, line);
             }
             VarKind::Points { n, xlo, xhi, ylo, yhi } => {
-                check_field(n, "点个数", &types, &mut errors, line);
-                check_field(xlo, "点 x 下界", &types, &mut errors, line);
-                check_field(xhi, "点 x 上界", &types, &mut errors, line);
-                check_field(ylo, "点 y 下界", &types, &mut errors, line);
-                check_field(yhi, "点 y 上界", &types, &mut errors, line);
-                check_const(n, "点个数", "点个数不能为负", |v| v >= 0.0, &mut errors, line);
+                check_field(n, "点个数", &types, &mut *errors, line);
+                check_field(xlo, "点 x 下界", &types, &mut *errors, line);
+                check_field(xhi, "点 x 上界", &types, &mut *errors, line);
+                check_field(ylo, "点 y 下界", &types, &mut *errors, line);
+                check_field(yhi, "点 y 上界", &types, &mut *errors, line);
+                check_const(n, "点个数", "点个数不能为负", |v| v >= 0.0, &mut *errors, line);
                 let xok = match (try_const(xlo), try_const(xhi)) {
                     (Ok(Some(a)), Ok(Some(b))) => a <= b,
                     (Err(e), _) => { errors.push(DslError::at(line, format!("点 x 下界表达式错误：{}", e.message))); true }
@@ -391,25 +419,25 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                 }
             }
             VarKind::Tree { n, ttype, w } => {
-                check_field(n, "树顶点数", &types, &mut errors, line);
+                check_field(n, "树顶点数", &types, &mut *errors, line);
                 let min_n = if *ttype == crate::ast::TreeType::Star { 2.0 } else { 1.0 };
-                check_const(n, "树顶点数", "菊花图 n 应 >= 2", |v| v >= min_n, &mut errors, line);
+                check_const(n, "树顶点数", "菊花图 n 应 >= 2", |v| v >= min_n, &mut *errors, line);
                 if *ttype != crate::ast::TreeType::Star {
-                    check_const(n, "树顶点数", "树顶点数 n 应 >= 1", |v| v >= 1.0, &mut errors, line);
+                    check_const(n, "树顶点数", "树顶点数 n 应 >= 1", |v| v >= 1.0, &mut *errors, line);
                 }
-                check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
+                check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut *errors, line);
             }
             VarKind::Graph { gtype, n, m, directed, connected, multi, loop_, k, w } => {
                 match gtype {
                     GraphType::Ring => {
-                        check_field(n, "环顶点数", &types, &mut errors, line);
-                        check_const(n, "环顶点数", "环顶点数 n 应 >= 3", |v| v >= 3.0, &mut errors, line);
-                        check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
+                        check_field(n, "环顶点数", &types, &mut *errors, line);
+                        check_const(n, "环顶点数", "环顶点数 n 应 >= 3", |v| v >= 3.0, &mut *errors, line);
+                        check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut *errors, line);
                     }
                     GraphType::BaseRing => {
-                        check_field(n, "基环树顶点数", &types, &mut errors, line);
-                        check_field(k.as_deref().unwrap_or("3"), "环大小", &types, &mut errors, line);
-                        check_const(n, "基环树顶点数", "基环树顶点数 n 应 >= 3", |v| v >= 3.0, &mut errors, line);
+                        check_field(n, "基环树顶点数", &types, &mut *errors, line);
+                        check_field(k.as_deref().unwrap_or("3"), "环大小", &types, &mut *errors, line);
+                        check_const(n, "基环树顶点数", "基环树顶点数 n 应 >= 3", |v| v >= 3.0, &mut *errors, line);
                         match (try_const(n), try_const(k.as_deref().unwrap_or("3"))) {
                             (Ok(Some(nv)), Ok(Some(kv))) if !(3.0..=nv).contains(&kv) => {
                                 errors.push(DslError::at(line, "环大小 k 应在 3~n 之间"));
@@ -418,16 +446,16 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                             (_, Err(e)) => errors.push(DslError::at(line, format!("环大小表达式错误：{}", e.message))),
                             _ => {}
                         }
-                        check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
+                        check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut *errors, line);
                     }
                     _ => {
                         let n_label = "图顶点数";
                         let m_label = "图边数";
-                        check_field(n, n_label, &types, &mut errors, line);
-                        check_field(m, m_label, &types, &mut errors, line);
-                        check_const(n, n_label, "图顶点数 n 应 >= 1", |v| v >= 1.0, &mut errors, line);
-                        check_const(m, m_label, "图边数 m 不能为负", |v| v >= 0.0, &mut errors, line);
-                        check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
+                        check_field(n, n_label, &types, &mut *errors, line);
+                        check_field(m, m_label, &types, &mut *errors, line);
+                        check_const(n, n_label, "图顶点数 n 应 >= 1", |v| v >= 1.0, &mut *errors, line);
+                        check_const(m, m_label, "图边数 m 不能为负", |v| v >= 0.0, &mut *errors, line);
+                        check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut *errors, line);
                         // 边数上限（常量可判定时；multi 允许重边则不限）
                         if !*multi {
                             if let (Ok(Some(nv)), Ok(Some(mv))) = (try_const(n), try_const(m)) {
@@ -486,5 +514,4 @@ pub fn validate(config: &Config) -> Vec<DslError> {
             }
         }
     }
-    errors
 }

@@ -1,24 +1,20 @@
 import { useRef, useState } from "react";
-import type { Item, VarKind } from "../api";
+import type { Item, RepeatBlock, VarKind } from "../api";
 import VariableRow from "./VariableRow";
 import { KIND_ORDER, makeItem } from "../kindMeta";
 
 interface Props {
   items: Item[];
-  repeatEnabled: boolean;
-  repeatCount: string;
+  repeat: RepeatBlock | null;
   onChangeItems: (items: Item[]) => void;
-  onToggleRepeat: (enabled: boolean) => void;
-  onChangeRepeatCount: (count: string) => void;
+  onChangeRepeat: (repeat: RepeatBlock | null) => void;
 }
 
 export default function VariableList({
   items,
-  repeatEnabled,
-  repeatCount,
+  repeat,
   onChangeItems,
-  onToggleRepeat,
-  onChangeRepeatCount,
+  onChangeRepeat,
 }: Props) {
   const dragIndex = useRef<number>(-1);
   const [overIndex, setOverIndex] = useState<number>(-1);
@@ -84,25 +80,36 @@ export default function VariableList({
     onChangeItems(next);
   };
 
+  /** 上/下移动一行（需求：变量顺序可调）。 */
+  const move = (i: number, dir: -1 | 1) => reorder(i, i + dir);
+
   return (
     <div className="var-panel">
       <div className="var-toolbar">
-        <label className="repeat-box">
-          <input
-            type="checkbox"
-            checked={repeatEnabled}
-            onChange={(e) => onToggleRepeat(e.target.checked)}
-          />
-          多测模式
-        </label>
-        <input
-          className="repeat-count"
-          disabled={!repeatEnabled}
-          value={repeatCount}
-          onChange={(e) => onChangeRepeatCount(e.target.value)}
-          title="重复次数"
-          placeholder="N"
-        />
+        {repeat ? (
+          <label className="repeat-box" title="repeat 块：整体重复 N 次，变量每轮覆盖；块内语句在 DSL 编辑器编辑">
+            repeat (
+            <input
+              className="repeat-count"
+              value={repeat.count}
+              onChange={(e) => onChangeRepeat({ ...repeat, count: e.target.value })}
+              placeholder="N"
+              spellCheck={false}
+            />
+            )
+            <button
+              className="btn-secondary"
+              onClick={() => onChangeRepeat(null)}
+              title="移除 repeat 块（块内语句会丢失，请先在 DSL 编辑器保存）"
+            >
+              移除
+            </button>
+          </label>
+        ) : (
+          <button className="btn-secondary" onClick={() => onChangeRepeat({ count: "3", items: [] })}>
+            ＋ repeat 块
+          </button>
+        )}
         <span className="toolbar-spacer" />
         <select
           value={JSON.stringify(newKind)}
@@ -123,6 +130,8 @@ export default function VariableList({
         <VariableRow
           key={i}
           index={i}
+          total={items.length}
+          onMove={move}
           item={item}
           dragging={overIndex === i}
           usedNames={usedNames}

@@ -83,10 +83,10 @@ pub fn build_prompt(text: &str, last_error: Option<&str>) -> String {
          DSL 规则：\n\
          - 行块 `line:` + 缩进子项 `int n: 1, 100` / `float x: 0, 1` / `text s: \"---\"` / `expr e: 2*n` / `str c: 10, \"ab\"`\n\
          - 重复行：`line (n):`（n 可省 = 1 行）\n\
+         - repeat 块：`repeat (T):` + 缩进所有语句，整体重复 T 次，变量每轮覆盖\n\
          - 顶层命令：`a = ints(n, 1, 100)`、`M = matrix(n, m, 0, 1)`、`p = perm(n)`、\n\
            `iv = intervals(n, 1, 100)`、`pt = points(n, 1, 10, 1, 10)`、`t = tree(n, int(1, 9))`、\n\
            `g = graph(n, m, 0, 0, int(1, 9))`（0/1 有向/连通，multi=1/loop=1/type=\"dag\"/\"bipartite\"）\n\
-         - 多测：第一行注释 `# 多测模式：重复 T 次`\n\
          - 树/图只输出边，无规模行；只能引用前面定义的名字\n\n\
          示例：\n\
          描述：第一行两个整数 n m，接下来 n 行每行两个整数 a b\n\
@@ -98,9 +98,9 @@ pub fn build_prompt(text: &str, last_error: Option<&str>) -> String {
          t = tree(n, int(1, 1000000000))\n\n\
          描述：多测，第一行 T，接下来 T 组，每组一个 n 行 m 列的矩阵\n\
          DSL：\n\
-         # 多测模式：重复 T 次\n\
-         line:\n    int T: 1, 100\n\
-         M = matrix(n, m, 0, 1)\n\n",
+         repeat (t):\n\
+         \x20   line:\n\x20   \x20   int t: 1, 100\n\
+         \x20   M = matrix(n, m, 0, 1)\n\n",
     );
     if let Some(e) = last_error {
         s.push_str(&format!("上次输出解析失败：{e}。请修正后重新输出。\n"));

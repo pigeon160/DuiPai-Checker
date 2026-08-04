@@ -21,7 +21,9 @@ import {
 interface Props {
   item: Item;
   index: number;
+  total: number;
   dragging: boolean;
+  onMove: (i: number, dir: -1 | 1) => void;
   onName: (name: string) => void;
   onKind: (kind: VarKind) => void;
   onDelete: () => void;
@@ -618,7 +620,10 @@ function KindForm({
 
 export default function VariableRow({
   item,
+  index,
+  total,
   dragging,
+  onMove,
   onName,
   onKind,
   onDelete,
@@ -631,12 +636,35 @@ export default function VariableRow({
   const nameErr = isLine ? null : nameError(item.name, nameTaken);
   const badge = kindColor(item.kind);
 
+  /** 上下移动按钮组（第一行 ↑ 禁用，最后一行 ↓ 禁用）。 */
+  const moveBtns = (
+    <span className="move-btns">
+      <button
+        className="move-btn"
+        disabled={index === 0}
+        onClick={() => onMove(index, -1)}
+        title="上移"
+      >
+        ↑
+      </button>
+      <button
+        className="move-btn"
+        disabled={index === total - 1}
+        onClick={() => onMove(index, 1)}
+        title="下移"
+      >
+        ↓
+      </button>
+    </span>
+  );
+
   return (
     <div
       className={`var-row${isLine ? " line-row" : ""}${dragging ? " dragging" : ""}`}
       draggable
       {...dragProps}
     >
+      {moveBtns}
       {isLine ? (
         <>
           <div className="line-head">

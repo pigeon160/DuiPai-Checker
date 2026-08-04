@@ -62,7 +62,7 @@ t = tree(n, int(1, 10))
 - 边权直接写范围：`tree(5, int(1, 9))`；图选项 `multi=1`（重边）/ `loop=1`（自环）/ `type="dag"|"bipartite"`
 - 树类型 `type="star"`（菊花图）/ `type="chain"`（链）
 - 已废弃：`val=`（节点权值）、`w=`（边权）、`prec=`（精度）等关键字写法，统一用位置参数
-- 多测模式：顶部注释 `# 多测模式：重复 3 次`，首行输出组数，整块独立随机重复
+- repeat 块：`repeat (N):` + 缩进语句，整体重复 N 次、变量每轮覆盖（无组数行）
 
 完整语法见 [docs/DSL.md](docs/DSL.md)。
 

@@ -36,11 +36,37 @@ br = base_ring(n, 3)
 
 #[test]
 fn multi_test_shape() {
-    let cfg = parse("# 多测模式：重复 3 次\nline:\n    int n: 5, 9\na = ints(n, 1, 9)\n").unwrap();
+    let cfg = parse("repeat (3):\n    line:\n        int n: 5, 9\n    a = ints(n, 1, 9)\n").unwrap();
     let lines = generate(&cfg, Some(1)).unwrap();
-    assert_eq!(lines[0], "3", "首行输出组数");
-    // 每组：1 行 n + 1 行数组
-    assert_eq!(lines.len(), 1 + 3 * 2);
+    // 不输出组数行；每组：1 行 n + 1 行数组
+    assert_eq!(lines.len(), 3 * 2, "repeat 3 轮，无组数行：{lines:?}");
+    // 变量每轮覆盖：每组 n 在 5..=9
+    for l in lines.iter().step_by(2) {
+        let n: i64 = l.parse().unwrap();
+        assert!((5..=9).contains(&n), "n={n}");
+    }
+}
+
+#[test]
+fn repeat_var_overwrites() {
+    // 第二轮的 n 应覆盖第一轮（每轮独立随机），且数组 a 引用当轮 n
+    let cfg = parse("repeat (3):\n    line:\n        int n: 5, 5\n    a = ints(n, 1, 9)\n").unwrap();
+    let lines = generate(&cfg, Some(1)).unwrap();
+    assert_eq!(lines.len(), 6);
+    // n 恒 5，数组首行 = 5 个元素
+    assert_eq!(lines[0], "5");
+    assert_eq!(lines[1].split_whitespace().count(), 5);
+    assert_eq!(lines[2], "5");
+    assert_eq!(lines[3].split_whitespace().count(), 5);
+}
+
+#[test]
+fn repeat_count_expr() {
+    let cfg = parse("repeat (2*2):\n    line:\n        int n: 1, 2\n").unwrap();
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(1)).unwrap();
+    assert_eq!(lines.len(), 4, "count 表达式 2*2=4 轮");
 }
 
 #[test]
@@ -167,7 +193,7 @@ fn empty_config() {
 
 #[test]
 fn repeat_bad_count() {
-    let cfg = parse("# 多测模式：重复 0 次\nline:\n    int n: 1, 2\n").unwrap();
+    let cfg = parse("repeat (0):\n    line:\n        int n: 1, 2\n").unwrap();
     let e = generate(&cfg, Some(0)).expect_err("should fail");
     assert!(e.message.contains(">= 1"), "{e}");
 }

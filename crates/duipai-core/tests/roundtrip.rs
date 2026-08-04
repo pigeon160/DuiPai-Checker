@@ -13,37 +13,38 @@ fn seeded() -> StdRng {
 #[test]
 fn parse_basic_kinds() {
     let text = "\
-# 多测模式：重复 3 次
-line:
-    int n: 1, 100
-    float x: 0, 1
-    float y: 0, 1, 4
-a = ints(n, 1, 100)
-b = floats(3, 0, 1, 5)
-c = ints(int(1, 5), 1, 9)
-d = ints(2*n, 0, 1)
-M = matrix(3, n, 0, 1)
-F = matf(int(1, 5), n, 0, 1, 4)
+repeat (3):
+    line:
+        int n: 1, 100
+        float x: 0, 1
+        float y: 0, 1, 4
+    a = ints(n, 1, 100)
+    b = floats(3, 0, 1, 5)
+    c = ints(int(1, 5), 1, 9)
+    d = ints(2*n, 0, 1)
+    M = matrix(3, n, 0, 1)
+    F = matf(int(1, 5), n, 0, 1, 4)
 ";
     let cfg = parse(text).expect("parse should succeed");
-    assert!(cfg.repeat.is_some());
-    assert_eq!(cfg.repeat.as_ref().unwrap().count, "3");
-    assert_eq!(cfg.items.len(), 7);
-    assert!(matches!(cfg.items[0].kind, duipai_core::VarKind::Line { .. }));
-    assert_eq!(cfg.items[1].name, "a");
-    assert_eq!(cfg.items[5].name, "M");
+    let rep = cfg.repeat.expect("repeat block");
+    assert_eq!(rep.count, "3");
+    assert_eq!(rep.items.len(), 7);
+    assert!(matches!(rep.items[0].kind, duipai_core::VarKind::Line { .. }));
+    assert_eq!(rep.items[1].name, "a");
+    assert_eq!(rep.items[5].name, "M");
+    assert!(cfg.items.is_empty());
 }
 
 #[test]
 fn roundtrip_stable() {
     let text = "\
-# 多测模式：重复 3 次
-line:
-    int n: 1, 100
-    float x: 0, 1, 4
-a = ints(n, 1, 100)
-M = matrix(3, n, 0, 1)
-F = matf(int(1, 5), n, 0, 1, 4)
+repeat (3):
+    line:
+        int n: 1, 100
+        float x: 0, 1, 4
+    a = ints(n, 1, 100)
+    M = matrix(3, n, 0, 1)
+    F = matf(int(1, 5), n, 0, 1, 4)
 ";
     let cfg = parse(text).expect("parse");
     let out = serialize(&cfg).expect("serialize");
@@ -72,19 +73,32 @@ b = floats(3, 0, 1)
 }
 
 #[test]
-fn repeat_comment_variants() {
-    // 无次数 -> 1
-    let cfg = parse("# 多测模式\nline:\n    int n: 1, 2").expect("parse");
-    assert_eq!(cfg.repeat.unwrap().count, "1");
-    // 中文冒号 + 次
+fn repeat_block_variants() {
+    // count 为常量表达式
+    let cfg = parse("repeat (2*3):\n    line:\n        int n: 1, 2").expect("parse");
+    assert_eq!(cfg.repeat.unwrap().count, "2 * 3");
+    // 缺括号
+    let e = parse("repeat 3:\n    line:\n        int n: 1, 2").expect_err("no paren");
+    assert!(e.message.contains("repeat (N):"), "{e}");
+    // 空块
+    let e = parse("repeat (3):").expect_err("empty");
+    assert!(e.message.contains("至少需要一个语句"), "{e}");
+    // 重复出现
+    let e = parse("repeat (3):\n    line:\n        int n: 1, 2\nrepeat (3):\n    line:\n        int m: 1, 2")
+        .expect_err("dup");
+    assert!(e.message.contains("只能出现一次"), "{e}");
+    // 块后不允许其他语句
+    let e = parse("repeat (3):\n    line:\n        int n: 1, 2\na = ints(3, 1, 9)").expect_err("after");
+    assert!(e.message.contains("必须包裹全部语句"), "{e}");
+    // 嵌套禁止
+    let e = parse("repeat (3):\n    repeat (2):\n        line:\n            int n: 1, 2").expect_err("nest");
+    assert!(e.message.contains("不能嵌套"), "{e}");
+    // repeat 前不允许其他语句
+    let e = parse("a = ints(3, 1, 9)\nrepeat (3):\n    line:\n        int n: 1, 2").expect_err("before");
+    assert!(e.message.contains("必须放在最前"), "{e}");
+    // 多测模式注释不再识别（作为普通注释忽略）
     let cfg = parse("# 多测模式：重复 5 次\nline:\n    int n: 1, 2").expect("parse");
-    assert_eq!(cfg.repeat.unwrap().count, "5");
-    // 英文冒号 + 无“次”
-    let cfg = parse("# 多测模式: 重复 12\nline:\n    int n: 1, 2").expect("parse");
-    assert_eq!(cfg.repeat.unwrap().count, "12");
-    // 只在前 8 行内识别
-    let cfg = parse("\n\n\n\n\n\n\n\n# 多测模式：重复 5 次\nline:\n    int n: 1, 2\n").expect("parse");
-    assert!(cfg.repeat.is_none());
+    assert!(cfg.repeat.is_none(), "多测注释已废弃");
 }
 
 #[test]

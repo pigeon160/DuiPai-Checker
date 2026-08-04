@@ -6,19 +6,23 @@
 
 use serde::{Deserialize, Serialize};
 
-/// 多测模式：顶部注释 `# 多测模式：重复 N 次`。
+/// repeat 块：`repeat (N):` + 缩进语句。
+///
+/// 生成语义：块内所有语句重复 N 次，每轮全新随机环境（变量名正常表示，
+/// 每次覆盖上一轮的值），不输出组数行。repeat 只能出现一次且在顶层。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RepeatMode {
-    pub enabled: bool,
-    /// 重复次数表达式文本（通常为数字字符串）。
+pub struct RepeatBlock {
+    /// 重复次数表达式（常量，如 `3`、`2*3`）。
     pub count: String,
+    /// 块内语句（按定义顺序执行）。
+    pub items: Vec<Item>,
 }
 
 /// 一份完整配置。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Config {
-    pub repeat: Option<RepeatMode>,
-    /// 按定义顺序排列的语句列表（顺序即生成顺序）。
+    pub repeat: Option<RepeatBlock>,
+    /// repeat 为空时按定义顺序排列的语句列表（顺序即生成顺序）。
     pub items: Vec<Item>,
 }
 
@@ -157,6 +161,6 @@ pub enum VarKind {
 
 impl Config {
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.items.is_empty() && self.repeat.as_ref().map_or(true, |r| r.items.is_empty())
     }
 }
