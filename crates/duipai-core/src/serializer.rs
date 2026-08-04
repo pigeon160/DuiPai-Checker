@@ -2,11 +2,9 @@
 //!
 //! 输出为规范化文本：每行一条语句，多测模式首行注释。
 
-use std::collections::HashMap;
-
 use crate::ast::{Config, ElemType, GraphType, Item, VarKind, Weight};
 use crate::error::DslResult;
-use crate::expr::eval_expr;
+use crate::expr::{parse_expr, ExprNode};
 
 const REPEAT_COMMENT: &str = "多测模式";
 
@@ -26,14 +24,17 @@ fn fmt_weight(w: &Weight) -> String {
 }
 
 /// 判断 array 的 rows 是否恒为 1（单行数组 -> ints/floats，否则 matrix/matf）。
+/// 结构化判断：常量 1 或 `int(1, 1)`；不做随机求值（避免 int(1,5) 碰巧得 1）。
 fn is_single_row(rows: &str) -> bool {
-    if rows.trim() == "1" {
-        return true;
-    }
-    let mut rng = rand::rng();
-    let env: HashMap<String, f64> = HashMap::new();
-    match eval_expr(rows, &env, &mut rng) {
-        Ok(v) if v == 1.0 => true,
+    let Ok(node) = parse_expr(rows) else {
+        return false;
+    };
+    match &node {
+        ExprNode::Num(v) => *v == 1.0,
+        ExprNode::Call { name, args } if name == "int" && args.len() == 2 => {
+            matches!(&args[0], ExprNode::Num(v) if *v == 1.0)
+                && matches!(&args[1], ExprNode::Num(v) if *v == 1.0)
+        }
         _ => false,
     }
 }
@@ -118,10 +119,26 @@ pub fn line_for(item: &Item) -> DslResult<String> {
             w,
             val,
         } => match gtype {
-            GraphType::Ring => format!("{name} = ring({n})"),
+            GraphType::Ring => {
+                let mut base = format!("{name} = ring({n}");
+                if let Some(w) = w {
+                    base.push_str(&format!(", w={}", fmt_weight(w)));
+                }
+                if let Some(val) = val {
+                    base.push_str(&format!(", val={}", fmt_weight(val)));
+                }
+                format!("{base})")
+            }
             GraphType::BaseRing => {
                 let k = k.as_deref().unwrap_or("3");
-                format!("{name} = base_ring({n}, {k})")
+                let mut base = format!("{name} = base_ring({n}, {k}");
+                if let Some(w) = w {
+                    base.push_str(&format!(", w={}", fmt_weight(w)));
+                }
+                if let Some(val) = val {
+                    base.push_str(&format!(", val={}", fmt_weight(val)));
+                }
+                format!("{base})")
             }
             _ => {
                 let d = if *directed { 1 } else { 0 };

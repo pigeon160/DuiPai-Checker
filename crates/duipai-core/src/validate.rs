@@ -206,6 +206,7 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                     GraphType::Ring => {
                         check_field(n, "环顶点数", &types, &mut errors, line);
                         check_const(n, "环顶点数", "环顶点数 n 应 >= 3", |v| v >= 3.0, &mut errors, line);
+                        check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
                         check_weight(val.as_ref(), "节点权值范围", "节点权值精度", &types, &mut errors, line);
                     }
                     GraphType::BaseRing => {
@@ -220,6 +221,7 @@ pub fn validate(config: &Config) -> Vec<DslError> {
                             (_, Err(e)) => errors.push(DslError::at(line, format!("环大小表达式错误：{}", e.message))),
                             _ => {}
                         }
+                        check_weight(w.as_ref(), "边权范围", "边权精度", &types, &mut errors, line);
                         check_weight(val.as_ref(), "节点权值范围", "节点权值精度", &types, &mut errors, line);
                     }
                     _ => {

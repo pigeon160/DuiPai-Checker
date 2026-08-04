@@ -126,13 +126,17 @@ gd = graph(n, 10, 1, 0, type=\"dag\")
 gb = graph(n, 10, 0, 0, type=\"bipartite\")
 gw = graph(n, 20, 1, 1, w=int(1, 10), val=float(0, 1))
 r = ring(5)
+rw = ring(5, w=int(1, 10), val=float(0, 1))
 br = base_ring(n, 3)
+brw = base_ring(n, 4, w=float(0, 1, 4))
 ";
     let cfg = parse(text).expect("parse all commands");
-    assert_eq!(cfg.items.len(), 16);
+    assert_eq!(cfg.items.len(), 18);
     let out = serialize(&cfg).expect("serialize");
     let cfg2 = parse(&out).expect("re-parse");
     assert_eq!(cfg, cfg2, "全命令往返 IR 一致");
+    assert!(out.contains("ring(5, w=int(1, 10), val=float(0, 1))"), "{out}");
+    assert!(out.contains("base_ring(n, 4, w=float(0, 1, 4))"), "{out}");
 }
 
 #[test]

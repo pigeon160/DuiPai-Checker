@@ -344,7 +344,7 @@ fn parse_cmd(name: &str, cmd: &str, args: &[Tok]) -> DslResult<Item> {
                 directed: false,
                 connected: true,
                 k: None,
-                w: None,
+                w: kw_expr("w").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
                 val: kw_expr("val").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
             }
         }
@@ -357,7 +357,7 @@ fn parse_cmd(name: &str, cmd: &str, args: &[Tok]) -> DslResult<Item> {
                 directed: false,
                 connected: true,
                 k: Some(expr_text(&pos[1])),
-                w: None,
+                w: kw_expr("w").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
                 val: kw_expr("val").map(|v| weight_from_kw(&v)).transpose()?.flatten(),
             }
         }

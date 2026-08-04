@@ -171,9 +171,8 @@ function KindForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => voi
             placeholder="k"
           />
         )}
-        {(v.gtype === "General" || v.gtype === "Ring" || v.gtype === "BaseRing") && (
-          <WeightGroup label="节点权" w={v.val} onChange={(w) => onKind(setWeight(kind, "val", w))} />
-        )}
+        <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, "w", w))} />
+        <WeightGroup label="节点权" w={v.val} onChange={(w) => onKind(setWeight(kind, "val", w))} />
       </>
     );
   }
