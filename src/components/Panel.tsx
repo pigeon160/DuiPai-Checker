@@ -60,30 +60,44 @@ export function SplitHandle({
 }) {
   const dragging = useRef(false);
   const lastY = useRef(0);
+  const elRef = useRef<HTMLDivElement>(null);
 
-  const onMouseDown = (e: React.MouseEvent) => {
+  const onPointerDown = (e: React.PointerEvent) => {
     if (disabled) return;
     e.preventDefault();
     dragging.current = true;
     lastY.current = e.clientY;
-    const move = (ev: MouseEvent) => {
+    elRef.current?.setPointerCapture(e.pointerId);
+    document.body.classList.add("resizing");
+
+    const move = (ev: PointerEvent) => {
       if (!dragging.current) return;
       onResize(ev.clientY - lastY.current);
       lastY.current = ev.clientY;
     };
-    const up = () => {
+    const up = (ev: PointerEvent) => {
+      if (!dragging.current) return;
       dragging.current = false;
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("resizing");
+      try {
+        elRef.current?.releasePointerCapture(ev.pointerId);
+      } catch {
+        // 已释放
+      }
+      elRef.current?.removeEventListener("pointermove", move);
+      elRef.current?.removeEventListener("pointerup", up);
+      elRef.current?.removeEventListener("pointercancel", up);
     };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+    elRef.current?.addEventListener("pointermove", move);
+    elRef.current?.addEventListener("pointerup", up);
+    elRef.current?.addEventListener("pointercancel", up);
   };
 
   return (
     <div
+      ref={elRef}
       className={`split-handle${disabled ? " disabled" : ""}`}
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
       onDoubleClick={onReset}
       title="拖拽调整高度，双击恢复自动"
     >

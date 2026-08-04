@@ -242,17 +242,19 @@ main.split {
 }
 
 .split-handle {
-  height: 6px;
-  flex: 0 0 6px;
-  background: var(--bg);
+  height: 7px;
+  flex: 0 0 7px;
+  background: var(--border-strong);
   cursor: ns-resize;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: background 0.12s;
+  touch-action: none;
 }
 
-.split-handle:hover {
+.split-handle:hover,
+.split-handle.dragging {
   background: var(--accent);
 }
 
@@ -261,19 +263,26 @@ main.split {
 }
 
 .split-handle.disabled:hover {
-  background: var(--bg);
+  background: var(--border-strong);
 }
 
 .handle-grip {
   width: 40px;
   height: 3px;
   border-radius: 2px;
-  background: var(--border-strong);
+  background: #b9bec6;
   transition: background 0.12s;
 }
 
-.split-handle:hover .handle-grip {
+.split-handle:hover .handle-grip,
+.split-handle.dragging .handle-grip {
   background: #fff;
+}
+
+/* 拖拽中禁止选中文本 */
+body.resizing {
+  user-select: none;
+  cursor: ns-resize;
 }
 
 /* ---------------- 输入控件 ---------------- */
@@ -411,6 +420,25 @@ input.invalid,
     border-color 0.12s;
 }
 
+/* 行类型：纵向块（标题行 + 行内项列表） */
+.var-row.line-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.line-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 30px;
+}
+
+.line-head .del-btn {
+  margin-left: auto;
+}
+
 .var-row:hover {
   box-shadow: var(--shadow-md);
   border-color: var(--border-strong);
@@ -453,22 +481,13 @@ input.invalid,
 }
 
 /* 行内项缩进导轨 */
-.line-form {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .line-items {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-left: 26px;
-  margin-top: 6px;
   padding-left: 14px;
   border-left: 2px solid #e3e0fb;
-  width: calc(100% - 40px);
 }
 
 .line-items .multi-part {

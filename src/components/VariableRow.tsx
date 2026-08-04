@@ -348,15 +348,13 @@ function splitPresets(charset: string): [
   return [{ lower, upper, digits }, rest];
 }
 
-/** 行块表单：标题行（重复控件 + ＋数）+ 行内项各占一行缩进。 */
-function LineForm({
+/** 行块标题控件：重复勾选 + 次数 + 提示 + ＋数。 */
+function LineHeadControls({
   kind,
   onKind,
-  nameTaken,
 }: {
   kind: VarKind;
   onKind: (k: VarKind) => void;
-  nameTaken?: (n: string) => boolean;
 }) {
   const { rows, items } = (kind as { Line: { rows: string; items: LineItem[] } }).Line;
   const [rowsError, setRowsError] = useState<string | null>(null);
@@ -398,54 +396,69 @@ function LineForm({
   };
 
   return (
-    <span className="line-form">
-      <span className={`multi-part${rowsError ? " invalid" : ""}`}>
-        <label className="repeat-toggle" title="重复输出多行">
+    <>
+      <label className="repeat-toggle" title="重复输出多行">
+        <input
+          type="checkbox"
+          checked={repeatOn}
+          onChange={(e) => setRows(e.target.checked ? "2" : "1")}
+        />
+        重复
+      </label>
+      {repeatOn && (
+        <>
           <input
-            type="checkbox"
-            checked={repeatOn}
-            onChange={(e) => setRows(e.target.checked ? "2" : "1")}
+            className={`field-input small${rowsError ? " invalid" : ""}`}
+            value={rows}
+            onChange={(e) => setRows(e.target.value)}
+            placeholder="N"
+            title="重复行数（表达式，可引用前面变量）"
+            spellCheck={false}
           />
-          重复
-        </label>
-        {repeatOn && (
-          <>
-            <input
-              className="field-input small"
-              value={rows}
-              onChange={(e) => setRows(e.target.value)}
-              placeholder="N"
-              title="重复行数（表达式，可引用前面变量）"
-              spellCheck={false}
-            />
-            <span className="wg-label">行</span>
-            {rowsError && <span className="inline-err">{rowsError}</span>}
-          </>
-        )}
-        {repeatOn && <span className="repeat-hint">重复行变量名按 n[k] 数组形式引用</span>}
-        <button
-          onClick={() =>
-            setItems([
-              ...items,
-              { name: nextName(), kind: { Int: { min: "1", max: "100" } } },
-            ])
-          }
-        >
-          ＋ 数
-        </button>
-      </span>
-      <span className="line-items">
-        {items.map((it, i) => (
-          <LineItemEditor
-            key={i}
-            item={it}
-            nameTaken={nameTaken}
-            onChange={(nit) => setItems(items.map((q, j) => (j === i ? nit : q)))}
-            onRemove={() => setItems(items.filter((_, j) => j !== i))}
-          />
-        ))}
-      </span>
-    </span>
+          <span className="wg-label">行</span>
+          {rowsError && <span className="inline-err">{rowsError}</span>}
+          <span className="repeat-hint">重复行变量名按 n[k] 数组形式引用</span>
+        </>
+      )}
+      <button
+        className="btn-secondary"
+        onClick={() =>
+          setItems([
+            ...items,
+            { name: nextName(), kind: { Int: { min: "1", max: "100" } } },
+          ])
+        }
+      >
+        ＋ 数
+      </button>
+    </>
+  );
+}
+
+/** 行内项列表（各占一行缩进）。 */
+function LineItems({
+  kind,
+  onKind,
+  nameTaken,
+}: {
+  kind: VarKind;
+  onKind: (k: VarKind) => void;
+  nameTaken?: (n: string) => boolean;
+}) {
+  const { rows, items } = (kind as { Line: { rows: string; items: LineItem[] } }).Line;
+  const setItems = (items: LineItem[]) => onKind({ Line: { rows, items } } as unknown as VarKind);
+  return (
+    <div className="line-items">
+      {items.map((it, i) => (
+        <LineItemEditor
+          key={i}
+          item={it}
+          nameTaken={nameTaken}
+          onChange={(nit) => setItems(items.map((q, j) => (j === i ? nit : q)))}
+          onRemove={() => setItems(items.filter((_, j) => j !== i))}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -462,7 +475,7 @@ function KindForm({
   const k = kind as Record<string, unknown>;
 
   if (key === "Line") {
-    return <LineForm kind={kind} onKind={onKind} nameTaken={nameTaken} />;
+    return <LineItems kind={kind} onKind={onKind} nameTaken={nameTaken} />;
   }
   if (key === "Array") {
     const v = k.Array as { elem_type: ElemType };
@@ -598,26 +611,40 @@ export default function VariableRow({
 
   return (
     <div
-      className={`var-row${dragging ? " dragging" : ""}`}
+      className={`var-row${isLine ? " line-row" : ""}${dragging ? " dragging" : ""}`}
       draggable
       {...dragProps}
     >
-      <span className="drag-handle" title="拖拽排序">⠿</span>
-      {!isLine && (
-        <input
-          className={`name-input${nameErr ? " invalid" : ""}`}
-          value={item.name}
-          onChange={(e) => onName(e.target.value)}
-          placeholder="变量名"
-          title={nameErr ?? "变量名"}
-          spellCheck={false}
-        />
+      {isLine ? (
+        <>
+          <div className="line-head">
+            <span className="drag-handle" title="拖拽排序">⠿</span>
+            <span className="kind-badge" style={{ background: badge.bg, color: badge.fg }}>
+              {kindLabel(item.kind)}
+            </span>
+            <LineHeadControls kind={item.kind} onKind={onKind} />
+            <button className="del-btn" onClick={onDelete} title="删除变量">✕</button>
+          </div>
+          <LineItems kind={item.kind} onKind={onKind} nameTaken={nameTaken} />
+        </>
+      ) : (
+        <>
+          <span className="drag-handle" title="拖拽排序">⠿</span>
+          <input
+            className={`name-input${nameErr ? " invalid" : ""}`}
+            value={item.name}
+            onChange={(e) => onName(e.target.value)}
+            placeholder="变量名"
+            title={nameErr ?? "变量名"}
+            spellCheck={false}
+          />
+          <span className="kind-badge" style={{ background: badge.bg, color: badge.fg }}>
+            {kindLabel(item.kind)}
+          </span>
+          <KindForm kind={item.kind} onKind={onKind} nameTaken={nameTaken} />
+          <button className="del-btn" onClick={onDelete} title="删除变量">✕</button>
+        </>
       )}
-      <span className="kind-badge" style={{ background: badge.bg, color: badge.fg }}>
-        {kindLabel(item.kind)}
-      </span>
-      <KindForm kind={item.kind} onKind={onKind} nameTaken={nameTaken} />
-      <button className="del-btn" onClick={onDelete} title="删除变量">✕</button>
     </div>
   );
 }
