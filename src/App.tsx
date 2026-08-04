@@ -15,6 +15,19 @@ import DslEditor from "./components/DslEditor";
 import VariableList from "./components/VariableList";
 import GeneratePanel from "./components/GeneratePanel";
 import CheckPanel from "./components/CheckPanel";
+import { Panel, SplitHandle } from "./components/Panel";
+
+const COLLAPSED_KEY = "duipai_collapsed";
+const HEIGHTS_KEY = "duipai_heights";
+
+function loadJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 const SAMPLE_DSL = `# 多测模式：重复 3 次
 n = int(1, 100)
@@ -46,6 +59,40 @@ export default function App() {
   itemsRef.current = items;
   const dslRef = useRef(dsl);
   dslRef.current = dsl;
+
+  // 面板折叠 / 拖拽高度（localStorage 持久化）
+  const [collapsed, setCollapsed] = useState<boolean[]>(() =>
+    loadJson(COLLAPSED_KEY, [false, false, false, false]),
+  );
+  const [heights, setHeights] = useState<(number | null)[]>([null, null, null, null]);
+  useEffect(() => {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
+  }, [collapsed]);
+  useEffect(() => {
+    localStorage.setItem(HEIGHTS_KEY, JSON.stringify(heights));
+  }, [heights]);
+
+  const togglePanel = (i: number) =>
+    setCollapsed((c) => c.map((v, j) => (j === i ? !v : v)));
+
+  /** 拖拽分隔条 i：调整上方面板高度 */
+  const resizePanel = (i: number) => (delta: number) => {
+    const base =
+      heights[i] ?? document.getElementById(`panel-${i}`)?.offsetHeight ?? 300;
+    const next = Math.min(2000, Math.max(60, base + delta));
+    setHeights((h) => {
+      const n = [...h];
+      n[i] = next;
+      return n;
+    });
+  };
+
+  const resetHeight = (i: number) =>
+    setHeights((h) => {
+      const n = [...h];
+      n[i] = null;
+      return n;
+    });
 
   // 语言注册（命令补全 + 变量名补全 + Ctrl+Enter 应用）
   useEffect(() => {
@@ -138,10 +185,14 @@ export default function App() {
       </header>
 
       <main className="split">
-        <section className="panel top">
-          <div className="panel-head">
-            <h2>图形化变量列表（修改自动同步到下方 DSL）</h2>
-          </div>
+        <Panel
+          id={0}
+          title="图形化变量列表（修改自动同步到下方 DSL）"
+          flex={3}
+          basis={heights[0]}
+          collapsed={collapsed[0]}
+          onToggle={() => togglePanel(0)}
+        >
           <VariableList
             items={items}
             repeatEnabled={repeatEnabled}
@@ -150,17 +201,26 @@ export default function App() {
             onToggleRepeat={setRepeatEnabled}
             onChangeRepeatCount={setRepeatCount}
           />
-        </section>
+        </Panel>
+        <SplitHandle
+          onResize={resizePanel(0)}
+          onReset={() => resetHeight(0)}
+          disabled={collapsed[0] || collapsed[1]}
+        />
 
-        <section className="panel mid">
-          <div className="panel-head">
-            <h2>DSL 编辑器</h2>
-            <div className="head-actions">
-              <button onClick={() => applyFromDsl()} title="Ctrl+Enter">
-                应用（解析为图形化列表）
-              </button>
-            </div>
-          </div>
+        <Panel
+          id={1}
+          title="DSL 编辑器"
+          flex={3}
+          basis={heights[1]}
+          collapsed={collapsed[1]}
+          onToggle={() => togglePanel(1)}
+          actions={
+            <button onClick={() => applyFromDsl()} title="Ctrl+Enter">
+              应用（解析为图形化列表）
+            </button>
+          }
+        >
           <div className="editor-wrap">
             <DslEditor
               value={dsl}
@@ -180,19 +240,37 @@ export default function App() {
               ))}
             </ul>
           )}
-        </section>
+        </Panel>
+        <SplitHandle
+          onResize={resizePanel(1)}
+          onReset={() => resetHeight(1)}
+          disabled={collapsed[1] || collapsed[2]}
+        />
 
-        <section className="panel gen">
-          <div className="panel-head">
-            <h2>数据生成预览</h2>
-          </div>
+        <Panel
+          id={2}
+          title="数据生成预览"
+          flex={0}
+          basis={heights[2]}
+          collapsed={collapsed[2]}
+          onToggle={() => togglePanel(2)}
+        >
           <GeneratePanel config={buildConfig()} genMode={genMode} ext={genMode === "External" ? ext : null} />
-        </section>
+        </Panel>
+        <SplitHandle
+          onResize={resizePanel(2)}
+          onReset={() => resetHeight(2)}
+          disabled={collapsed[2] || collapsed[3]}
+        />
 
-        <section className="panel check">
-          <div className="panel-head">
-            <h2>对拍</h2>
-          </div>
+        <Panel
+          id={3}
+          title="对拍"
+          flex={4}
+          basis={heights[3]}
+          collapsed={collapsed[3]}
+          onToggle={() => togglePanel(3)}
+        >
           <CheckPanel
             config={buildConfig()}
             genMode={genMode}
@@ -200,7 +278,7 @@ export default function App() {
             onGenMode={setGenMode}
             onExt={setExt}
           />
-        </section>
+        </Panel>
       </main>
     </div>
   );

@@ -72,27 +72,8 @@ main.split {
   min-height: 0;
 }
 
-.panel.top {
-  flex: 0 0 auto;
-  min-height: 220px;
-}
-
-.panel.mid {
-  flex: 0 0 auto;
-  min-height: 280px;
-  border-top: 3px solid #0d1117;
-}
-
-.panel.gen {
-  flex: 0 0 auto;
-  min-height: 180px;
-  border-top: 3px solid #0d1117;
-}
-
-.panel.check {
-  flex: 0 0 auto;
-  min-height: 340px;
-  border-top: 3px solid #0d1117;
+.panel.collapsed {
+  min-height: 0;
 }
 
 .panel-head {
@@ -103,6 +84,57 @@ main.split {
   background: #e8eaee;
   border-bottom: 1px solid #d0d3d9;
   flex: 0 0 auto;
+  cursor: pointer;
+  user-select: none;
+}
+
+.panel-head:hover {
+  background: #dfe3e8;
+}
+
+.chevron {
+  font-size: 10px;
+  color: #57606a;
+  transition: transform 0.12s;
+  width: 12px;
+  text-align: center;
+}
+
+.chevron.closed {
+  transform: rotate(-90deg);
+}
+
+.split-handle {
+  height: 6px;
+  flex: 0 0 6px;
+  background: #d0d3d9;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.split-handle:hover {
+  background: #0969da;
+}
+
+.split-handle.disabled {
+  cursor: default;
+}
+
+.split-handle.disabled:hover {
+  background: #d0d3d9;
+}
+
+.handle-grip {
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: #b6bac0;
+}
+
+.split-handle:hover .handle-grip {
+  background: #fff;
 }
 
 .panel-head h2 {
