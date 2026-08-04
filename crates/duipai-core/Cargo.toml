@@ -1,0 +1,9 @@
+[package]
+name = "duipai-core"
+version = "0.1.0"
+edition = "2021"
+description = "对拍 DSL 核心库：解析、序列化、表达式求值（纯逻辑，无 UI 依赖）"
+
+[dependencies]
+rand = "0.9"
+serde = { version = "1", features = ["derive"] }

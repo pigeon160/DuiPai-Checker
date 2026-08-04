@@ -1,0 +1,15 @@
+//! duipai-core：对拍输入 DSL 核心库（解析 / 序列化 / 表达式求值）。
+//!
+//! 纯逻辑实现，不依赖任何 UI 框架，供 Tauri 后端与未来的生成器 / NLP 模块复用。
+
+pub mod ast;
+pub mod error;
+pub mod expr;
+pub mod parser;
+pub mod serializer;
+
+pub use ast::{Config, ElemType, GraphType, Item, RepeatMode, VarKind, Weight};
+pub use error::{DslError, DslResult};
+pub use expr::{eval_expr, parse_expr, tokenize, ExprNode, Tok};
+pub use parser::{parse, KNOWN_COMMANDS};
+pub use serializer::serialize;

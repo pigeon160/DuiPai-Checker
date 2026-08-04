@@ -10,3 +10,11 @@ fail/
 __pycache__/
 *.py[cod]
 *.spec
+
+# Rust / Cargo
+target/
+**/target/
+
+# Node / Tauri
+node_modules/
+src-tauri/gen/schemas/

@@ -5,14 +5,25 @@ GitHub：[pigeon160/DuiPai-Checker](https://github.com/pigeon160/DuiPai-Checker)
 图形化对拍工具：用随机数据反复运行“正解”与“暴力”两份程序并比较输出，自动找出
 **WA（答案不一致）/ TLE（超时）/ RE（运行错误）** 反例，并保存现场供分析。
 
-纯标准库实现（tkinter + subprocess + threading + random 等），跨平台：
-**Linux / Windows / macOS**。Windows 下可用 PyInstaller 打包为无控制台的单文件 exe。
-
-![风格] 朴素界面：自适应原生主题（Windows/macOS/Linux 各自原生外观）、浅色背景、默认控件。
+> **开发中：Rust 重写**（离线桌面应用，Tauri 2 + React + 纯 Rust 核心）。
+> 旧版 Python（tkinter）实现已移入 [`legacy/`](legacy/)。
 
 ---
 
-## 特性
+## 当前结构（Rust 重写进行中）
+
+- `crates/duipai-core/`：纯 Rust 核心库——DSL 解析 / 序列化 / 表达式求值（零 UI 依赖）
+- `src-tauri/`：Tauri 2 薄胶水层，仅暴露 IPC 命令
+- `src/`：React + TypeScript 前端
+
+```bash
+npm install
+npm run tauri dev
+```
+
+---
+
+## 特性（legacy 版本）
 
 - **程序路径**
   - “运行命令”模式：如 `python3 ./sol.py`、`./sol`（已编译程序）。

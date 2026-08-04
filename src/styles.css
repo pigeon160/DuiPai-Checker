@@ -1,0 +1,104 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f5f6f8;
+  color: #1f2328;
+}
+
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px 20px 48px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  border-bottom: 2px solid #e0e2e6;
+  margin-bottom: 12px;
+}
+
+header h1 {
+  font-size: 20px;
+  margin: 10px 0;
+}
+
+.status {
+  color: #57606a;
+  font-size: 13px;
+}
+
+section {
+  margin-top: 16px;
+}
+
+section h2 {
+  font-size: 14px;
+  margin: 0 0 8px;
+  color: #444;
+}
+
+textarea.dsl-editor {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+  padding: 8px;
+  border: 1px solid #c9ccd1;
+  border-radius: 6px;
+  resize: vertical;
+}
+
+.toolbar {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  padding: 5px 14px;
+  border: 1px solid #c9ccd1;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:hover {
+  background: #f0f1f3;
+}
+
+pre.json {
+  background: #0d1117;
+  color: #c9d1d9;
+  padding: 12px;
+  border-radius: 6px;
+  overflow: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-height: 480px;
+}
+
+section.error pre {
+  background: #fff1f0;
+  color: #b42318;
+  border: 1px solid #f5c2c0;
+  border-radius: 6px;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.ok {
+  color: #1a7f37;
+  font-size: 13px;
+}
+
+.warn {
+  color: #9a6700;
+  font-size: 13px;
+}

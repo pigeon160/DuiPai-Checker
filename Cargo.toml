@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/duipai-core", "src-tauri"]
+
+[profile.release]
+lto = true
+strip = true

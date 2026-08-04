@@ -1,0 +1,19 @@
+[package]
+name = "duipai-checker"
+version = "0.1.0"
+edition = "2021"
+description = "对拍检查器（Tauri 壳层，仅暴露 IPC，逻辑在 duipai-core）"
+
+[lib]
+name = "duipai_checker_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+duipai-core = { path = "../crates/duipai-core" }
+rand = "0.9"
