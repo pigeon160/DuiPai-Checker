@@ -773,3 +773,39 @@ input.invalid,
   line-height: 1.5;
   white-space: pre;
 }
+
+/* ---------------- Phase 4：自然语言 → DSL ---------------- */
+.nl-panel { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+.nl-top { display: flex; gap: 10px; align-items: flex-start; }
+.nl-input {
+  flex: 1; min-height: 74px; resize: vertical;
+  font-family: inherit; font-size: 13px; line-height: 1.6;
+  padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--card); color: var(--text);
+}
+.nl-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.nl-buttons { display: flex; flex-direction: column; gap: 6px; }
+.nl-result { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); padding: 10px 12px; }
+.nl-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.nl-warnings { margin: 0 0 6px; }
+.nl-dsl {
+  margin: 0; padding: 10px 12px; background: var(--code-bg); color: var(--code-text);
+  border-radius: 6px; font: 13px/1.6 Consolas, "Courier New", monospace;
+  white-space: pre-wrap; max-height: 260px; overflow: auto;
+}
+.nl-none { color: var(--text-2); font-size: 13px; margin: 4px 0; }
+.badge.conf-hi { background: var(--ok-soft); color: var(--ok); }
+.badge.conf-mid { background: #fef9c3; color: var(--warn); }
+.badge.conf-lo { background: var(--err-soft); color: var(--err); }
+.badge.rule { background: var(--accent-soft); color: var(--accent); }
+.badge.model { background: #fce7f3; color: #db2777; }
+.nl-model {
+  border: 1px dashed var(--border-strong); border-radius: var(--radius);
+  padding: 10px 12px; background: #fafbfc;
+}
+.nl-model-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.nl-model-head h3 { margin: 0; font-size: 13px; color: var(--text-2); font-weight: 600; }
+.nl-model-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.nl-model-path { flex: 1 1 260px; min-width: 0; }
+.nl-model-msg { display: block; margin-top: 6px; }
+.nl-model-hint { margin: 8px 0 0; font-size: 12px; color: var(--text-2); line-height: 1.6; }

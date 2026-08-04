@@ -15,10 +15,12 @@ import DslEditor from "./components/DslEditor";
 import VariableList from "./components/VariableList";
 import GeneratePanel from "./components/GeneratePanel";
 import CheckPanel from "./components/CheckPanel";
+import NlPanel from "./components/NlPanel";
 import { Panel, SplitHandle } from "./components/Panel";
 
 const COLLAPSED_KEY = "duipai_collapsed";
 const HEIGHTS_KEY = "duipai_heights";
+const PANEL_COUNT = 5;
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -55,9 +57,9 @@ export default function App() {
 
   // 面板折叠 / 拖拽高度（localStorage 持久化）
   const [collapsed, setCollapsed] = useState<boolean[]>(() =>
-    loadJson(COLLAPSED_KEY, [false, false, false, false]),
+    loadJson(COLLAPSED_KEY, Array(PANEL_COUNT).fill(false)),
   );
-  const [heights, setHeights] = useState<(number | null)[]>([null, null, null, null]);
+  const [heights, setHeights] = useState<(number | null)[]>(Array(PANEL_COUNT).fill(null));
   useEffect(() => {
     localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
   }, [collapsed]);
@@ -269,6 +271,26 @@ export default function App() {
             ext={ext}
             onGenMode={setGenMode}
             onExt={setExt}
+          />
+        </Panel>
+        <SplitHandle
+          onResize={resizePanel(3)}
+          onReset={() => resetHeight(3)}
+          disabled={collapsed[3] || collapsed[4]}
+        />
+
+        <Panel
+          id={4}
+          title="自然语言 → DSL"
+          basis={heights[4]}
+          collapsed={collapsed[4]}
+          onToggle={() => togglePanel(4)}
+        >
+          <NlPanel
+            onLoadDsl={(dslText) => {
+              setDsl(dslText);
+              setEditorFocused(false);
+            }}
           />
         </Panel>
       </main>

@@ -493,3 +493,15 @@
 - PowerShell 5.1 读写 UTF-8 文件会双重乱码——文件读写一律用显式 Encoding，或用编辑器工具
 - 错误消息全中文；DSL 语法全英文（早期中文关键字已废弃）
 - 测试 99+ 全绿：往返一致性、生成形态、校验、进程/内存、规则引擎
+## v0.1.0 Phase 4：自然语言 → DSL（2026-08-05）
+
+- 规则引擎 `duipai-core/src/nlg.rs`：中英文模板 → DSL，覆盖多测/单行/重复行/数组/矩阵/树/图/排列/区间/点集；
+  范围写法支持 (1<=n<=100)、1 ≤ n ≤ 10^5、n∈[1,100]、in [1, 10^9]、1 到 100、不超过、int(1,9)；中文数字/变量数量；
+  置信度（完整识别 0.95 / 含默认推断 0.7）+ 警告（默认值提示）
+- 模型层 `duipai-core/src/model.rs`：feature `nl-model` 门控（llama-cpp-2 待接入）、ModelStatus/ModelConfig、
+  few-shot 提示模板、推理占位
+- IPC：`nl_to_dsl_ipc` / `model_status` / `model_set_path`（持久化到应用配置目录 models/config.json）/
+  `model_load` / `model_download`（系统 curl 下载 + model://progress 阶段事件）
+- 前端第五面板「自然语言 → DSL」：textarea + 转换 + 置信度徽章 + 来源标签 + 警告列表 + 预览 +
+  载入编辑器 + 模型状态条（路径设置/加载/下载）
+- 测试 125 全绿（新增 nlg 19 + model 5）；文档 DSL.md 补自然语言节、README 五面板

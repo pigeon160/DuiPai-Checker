@@ -687,7 +687,9 @@ name = "duipai-core"
 version = "0.1.0"
 dependencies = [
  "rand",
+ "regex",
  "serde",
+ "serde_json",
  "windows-sys 0.60.2",
 ]
 

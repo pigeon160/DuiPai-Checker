@@ -7,6 +7,8 @@ pub mod check;
 pub mod error;
 pub mod expr;
 pub mod generator;
+pub mod model;
+pub mod nlg;
 pub mod parser;
 pub mod runner;
 pub mod serializer;
@@ -23,6 +25,11 @@ pub use check::{
 pub use error::{DslError, DslResult};
 pub use expr::{collect_names, eval_expr, parse_expr, tokenize, EnvValue, ExprNode, Tok};
 pub use generator::{format_float, generate};
+pub use model::{
+    build_prompt, check_model_path, infer, MODEL_AVAILABLE, ModelConfig, ModelInferRequest,
+    ModelInferResult, ModelStatus,
+};
+pub use nlg::{nl_to_dsl, rule_to_dsl, NlMethod, NlResult};
 pub use parser::{parse, KNOWN_COMMANDS, LINE_ITEM_KINDS, RETIRED_COMMANDS, TOP_COMMANDS};
 pub use runner::{
     compare, compile_cpp, normalize, parse_command, run_argv, run_argv_ex, run_program,

@@ -230,3 +230,53 @@ export function duipaiCancel(): Promise<void> {
 export function duipaiRunning(): Promise<boolean> {
   return invoke<boolean>("duipai_running");
 }
+
+// --------------------------------------------------------------------------- //
+// Phase 4：自然语言 → DSL
+// --------------------------------------------------------------------------- //
+
+export type NlMethod = "Rule" | "Model";
+
+/** 自然语言转换结果。 */
+export interface NlResult {
+  dsl: string;
+  /** 置信度 0~1。 */
+  confidence: number;
+  method: NlMethod;
+  warnings: string[];
+}
+
+export function nlToDsl(text: string): Promise<NlResult> {
+  return invoke<NlResult>("nl_to_dsl_ipc", { text });
+}
+
+/** 模型通道状态。 */
+export interface ModelStatus {
+  available: boolean;
+  path: string | null;
+  loaded: boolean;
+  busy: boolean;
+}
+
+/** 下载进度事件（model://progress）。 */
+export interface ModelProgress {
+  stage: "start" | "done" | "error";
+  file: string;
+  message: string;
+}
+
+export function modelStatus(): Promise<ModelStatus> {
+  return invoke<ModelStatus>("model_status");
+}
+
+export function modelSetPath(path: string): Promise<ModelStatus> {
+  return invoke<ModelStatus>("model_set_path", { path });
+}
+
+export function modelLoad(): Promise<ModelStatus> {
+  return invoke<ModelStatus>("model_load");
+}
+
+export function modelDownload(url: string): Promise<string> {
+  return invoke<string>("model_download", { url });
+}
