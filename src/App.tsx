@@ -188,7 +188,6 @@ export default function App() {
         <Panel
           id={0}
           title="图形化变量列表（修改自动同步到下方 DSL）"
-          flex={3}
           basis={heights[0]}
           collapsed={collapsed[0]}
           onToggle={() => togglePanel(0)}
@@ -211,7 +210,6 @@ export default function App() {
         <Panel
           id={1}
           title="DSL 编辑器"
-          flex={3}
           basis={heights[1]}
           collapsed={collapsed[1]}
           onToggle={() => togglePanel(1)}
@@ -250,7 +248,6 @@ export default function App() {
         <Panel
           id={2}
           title="数据生成预览"
-          flex={0}
           basis={heights[2]}
           collapsed={collapsed[2]}
           onToggle={() => togglePanel(2)}
@@ -266,7 +263,6 @@ export default function App() {
         <Panel
           id={3}
           title="对拍"
-          flex={4}
           basis={heights[3]}
           collapsed={collapsed[3]}
           onToggle={() => togglePanel(3)}

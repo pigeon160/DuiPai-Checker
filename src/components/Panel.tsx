@@ -1,11 +1,10 @@
 import { useRef, type ReactNode } from "react";
 
-/** 可折叠、可拖拽调高的面板。 */
+/** 可折叠、可拖拽调高的面板（自然高度，页面整体滚动）。 */
 export function Panel({
   id,
   title,
   actions,
-  flex,
   basis,
   collapsed,
   onToggle,
@@ -14,18 +13,14 @@ export function Panel({
   id: number;
   title: string;
   actions?: ReactNode;
-  /** 弹性比例（grow），折叠时忽略 */
-  flex: number;
-  /** 拖拽后的固定高度（px）；null = 弹性模式 */
+  /** 拖拽后的固定高度（px）；null = 自然高度 */
   basis: number | null;
   collapsed: boolean;
   onToggle: () => void;
   children: ReactNode;
 }) {
   const style: React.CSSProperties = {
-    flexGrow: collapsed ? 0 : flex,
-    flexShrink: 0,
-    flexBasis: basis != null ? `${basis}px` : undefined,
+    flex: collapsed ? "0 0 0px" : basis != null ? `0 0 ${basis}px` : "0 0 auto",
   };
   return (
     <section

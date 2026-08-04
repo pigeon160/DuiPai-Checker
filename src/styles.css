@@ -282,8 +282,8 @@ select {
 /* ---------------- DSL 编辑器 ---------------- */
 
 .editor-wrap {
-  flex: 1 1 auto;
-  min-height: 120px;
+  height: 320px;
+  flex: 0 0 auto;
 }
 
 .err-list {
@@ -462,8 +462,8 @@ button:hover {
 }
 
 .log-box {
-  flex: 1 1 auto;
-  min-height: 80px;
+  flex: 0 0 auto;
+  height: 220px;
   overflow-y: auto;
   background: #0d1117;
   color: #c9d1d9;
