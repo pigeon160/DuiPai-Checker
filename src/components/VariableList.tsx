@@ -24,6 +24,20 @@ export default function VariableList({
   const [overIndex, setOverIndex] = useState<number>(-1);
   const [newKind, setNewKind] = useState<VarKind>(KIND_ORDER[0].kind);
 
+  // 跨行重名检测（名称框红框提示）
+  const nameCount = new Map<string, number>();
+  for (const it of items) {
+    const key = Object.keys(it.kind)[0];
+    if (key === "Multi") {
+      for (const p of (it.kind as { Multi: { parts: { name: string }[] } }).Multi.parts) {
+        nameCount.set(p.name, (nameCount.get(p.name) ?? 0) + 1);
+      }
+    } else {
+      nameCount.set(it.name, (nameCount.get(it.name) ?? 0) + 1);
+    }
+  }
+  const nameTaken = (n: string) => (nameCount.get(n) ?? 0) > 1;
+
   const addItem = () => {
     const used = new Set(items.map((i) => i.name));
     let n = 1;
@@ -95,6 +109,7 @@ export default function VariableList({
             onChangeItems(next);
           }}
           onDelete={() => onChangeItems(items.filter((_, j) => j !== i))}
+          nameTaken={nameTaken}
           dragProps={{
             onDragStart: (e) => {
               dragIndex.current = i;

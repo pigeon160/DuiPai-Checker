@@ -1,5 +1,23 @@
 import type { Item, VarKind, Weight, ElemType } from "./api";
 
+/** DSL 保留字（命令 + repeat），不可用作变量名。 */
+export const RESERVED_COMMANDS = new Set([
+  "int", "float", "ints", "floats", "matrix", "matf", "perm", "tree", "graph",
+  "str", "strs", "binseq", "intervals", "points", "ring", "base_ring", "repeat",
+]);
+
+/** 变量名格式：字母/下划线开头，后跟字母数字下划线。 */
+export const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** 校验变量名，返回错误信息或 null。 */
+export function nameError(name: string, taken?: (n: string) => boolean): string | null {
+  if (name === "") return null;
+  if (!NAME_RE.test(name)) return "变量名须以字母或 _ 开头，仅含字母/数字/_";
+  if (RESERVED_COMMANDS.has(name)) return `“${name}”是保留字`;
+  if (taken?.(name)) return `变量名重复：${name}`;
+  return null;
+}
+
 export type { VarKind };
 
 /** 类型中文名（顺序即“添加变量”下拉顺序）。 */

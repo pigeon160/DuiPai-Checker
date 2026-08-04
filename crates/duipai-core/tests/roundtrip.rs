@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use duipai_core::{eval_expr, generate, parse, serialize, validate};
+use duipai_core::{eval_expr, generate, parse, serialize, validate, EnvValue};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -239,7 +239,7 @@ fn err_kw_dup() {
 #[test]
 fn expr_arithmetic() {
     let mut env = HashMap::new();
-    env.insert("n".to_string(), 100.0);
+    env.insert("n".to_string(), EnvValue::Scalar(100.0));
     let mut rng = seeded();
     assert_eq!(eval_expr("2*n", &env, &mut rng).unwrap(), 200.0);
     assert_eq!(eval_expr("n+1", &env, &mut rng).unwrap(), 101.0);
@@ -556,4 +556,76 @@ fn multi_repeat_single_assign_rejected() {
 fn multi_repeat_duplicate_rejected() {
     let e = parse("n = int(1, 5), m = int(1, 5), repeat(2), repeat(3)\n").expect_err("dup repeat");
     assert!(e.message.contains("只能出现一次"), "{e}");
+}
+
+// --------------------------------------------------------------------------- //
+// 数组索引引用 a[i] / a[i][j]（1 起）
+// --------------------------------------------------------------------------- //
+
+#[test]
+fn index_single_row_array() {
+    let cfg = parse("a = ints(3, 10, 10)\nfirst = a[1]\nlast = a[3]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(0)).unwrap();
+    assert_eq!(lines[0], "10 10 10");
+    assert_eq!(lines[1], "10", "a[1]");
+    assert_eq!(lines[2], "10", "a[3]");
+}
+
+#[test]
+fn index_matrix() {
+    let cfg = parse("M = matrix(2, 3, 5, 5)\nx = M[1][2]\ny = M[2][3]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.is_empty(), "{errs:?}");
+    let lines = generate(&cfg, Some(0)).unwrap();
+    assert_eq!(lines[0], "5 5 5");
+    assert_eq!(lines[1], "5 5 5");
+    assert_eq!(lines[2], "5", "M[1][2]");
+    assert_eq!(lines[3], "5", "M[2][3]");
+}
+
+#[test]
+fn index_validate_layer_mismatch() {
+    // 矩阵单层索引
+    let cfg = parse("M = matrix(2, 3, 1, 9)\nx = M[1]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("需要 2 个索引")), "{errs:?}");
+    // 单行数组双层索引
+    let cfg = parse("a = ints(3, 1, 9)\nx = a[1][2]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("需要 1 个索引")), "{errs:?}");
+}
+
+#[test]
+fn index_validate_oob() {
+    let cfg = parse("a = ints(3, 1, 9)\nx = a[5]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("越界")), "{errs:?}");
+    let cfg = parse("M = matrix(2, 3, 1, 9)\nx = M[3][1]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("越界")), "{errs:?}");
+}
+
+#[test]
+fn index_non_array_rejected() {
+    let cfg = parse("n = int(1, 9)\nx = n[1]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("不是数组")), "{errs:?}");
+}
+
+#[test]
+fn index_runtime_oob() {
+    // 行数/索引含变量，静态无法判定 -> 生成期报错
+    let cfg = parse("a = ints(2, 1, 9)\nk = int(3, 3)\nx = a[k]\n").expect("parse");
+    let e = generate(&cfg, Some(0)).expect_err("runtime oob");
+    assert!(e.message.contains("越界"), "{e}");
+    assert_eq!(e.line, Some(3));
+}
+
+#[test]
+fn index_into_string_rejected() {
+    let cfg = parse("s = str(3, \"ab\")\nx = s[1]\n").expect("parse");
+    let errs = validate(&cfg);
+    assert!(errs.iter().any(|e| e.message.contains("不是数组")), "{errs:?}");
 }

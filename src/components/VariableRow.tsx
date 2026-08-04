@@ -1,9 +1,12 @@
+import { useEffect, useState } from "react";
 import type { Item, MultiPart, VarKind, Weight, ElemType } from "../api";
+import { exprEval } from "../api";
 import {
   editField,
   kindFieldValue,
   kindFields,
   kindLabel,
+  nameError,
   setElemType,
   setGraphFlag,
   setGtype,
@@ -17,6 +20,7 @@ interface Props {
   onName: (name: string) => void;
   onKind: (kind: VarKind) => void;
   onDelete: () => void;
+  nameTaken?: (n: string) => boolean;
   dragProps: {
     onDragStart: (e: React.DragEvent) => void;
     onDragOver: (e: React.DragEvent) => void;
@@ -100,14 +104,50 @@ function TextFields({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => v
   );
 }
 
-/** 多赋值表单：每项 name + expr，常驻"＋ 数"与"重复 N 行"。 */
-function MultiForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => void }) {
+/** 多赋值表单：每项 name + expr，常驻"＋ 数"与"重复 N 行"（实时校验）。 */
+function MultiForm({
+  kind,
+  onKind,
+  nameTaken,
+}: {
+  kind: VarKind;
+  onKind: (k: VarKind) => void;
+  nameTaken?: (n: string) => boolean;
+}) {
   const { rows, parts } = (kind as { Multi: { rows: string; parts: MultiPart[] } }).Multi;
+  const [rowsError, setRowsError] = useState<string | null>(null);
   const setParts = (parts: MultiPart[]) =>
     onKind({ Multi: { rows, parts } } as unknown as VarKind);
+
+  // 重复行数实时校验：语法合法；常量时须 >= 1；引用未定义变量视为合法表达式
+  useEffect(() => {
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      if (rows.trim() === "") {
+        if (!cancelled) setRowsError(null);
+        return;
+      }
+      try {
+        const v = await exprEval(rows, {});
+        if (!cancelled) setRowsError(v < 1 ? "重复行数须 ≥ 1" : null);
+      } catch (e) {
+        const msg = (e as { message?: string }).message ?? String(e);
+        if (msg.includes("未定义的变量")) {
+          if (!cancelled) setRowsError(null);
+        } else if (!cancelled) {
+          setRowsError("行数须为表达式且 ≥ 1");
+        }
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [rows]);
+
   return (
     <>
-      <span className="multi-part" title="重复输出行数（表达式，默认 1 行）">
+      <span className={`multi-part${rowsError ? " invalid" : ""}`} title="重复输出行数（表达式，默认 1 行）">
         <span className="wg-label">重复</span>
         <input
           className="field-input small"
@@ -119,37 +159,42 @@ function MultiForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => vo
           spellCheck={false}
         />
         <span className="wg-label">行</span>
+        {rowsError && <span className="inline-err">{rowsError}</span>}
       </span>
-      {parts.map((p, i) => (
-        <span key={i} className="multi-part">
-          <input
-            className="name-input small-name"
-            value={p.name}
-            onChange={(e) =>
-              setParts(parts.map((q, j) => (j === i ? { ...q, name: e.target.value } : q)))
-            }
-            placeholder={`名${i + 1}`}
-            spellCheck={false}
-          />
-          <input
-            className="field-input expr-input"
-            title={`第 ${i + 1} 个数表达式（int()/float()/算术/引用均可）`}
-            value={p.expr}
-            onChange={(e) =>
-              setParts(parts.map((q, j) => (j === i ? { ...q, expr: e.target.value } : q)))
-            }
-            placeholder="int(1, 100)"
-            spellCheck={false}
-          />
-          <button
-            className="del-btn"
-            onClick={() => setParts(parts.filter((_, j) => j !== i))}
-            title="删除该数"
-          >
-            ✕
-          </button>
-        </span>
-      ))}
+      {parts.map((p, i) => {
+        const err = nameError(p.name, nameTaken);
+        return (
+          <span key={i} className={`multi-part${err ? " invalid" : ""}`}>
+            <input
+              className="name-input small-name"
+              value={p.name}
+              onChange={(e) =>
+                setParts(parts.map((q, j) => (j === i ? { ...q, name: e.target.value } : q)))
+              }
+              placeholder={`名${i + 1}`}
+              title={err ?? `第 ${i + 1} 个数名字`}
+              spellCheck={false}
+            />
+            <input
+              className="field-input expr-input"
+              title={`第 ${i + 1} 个数表达式（int()/float()/算术/引用/数组索引均可）`}
+              value={p.expr}
+              onChange={(e) =>
+                setParts(parts.map((q, j) => (j === i ? { ...q, expr: e.target.value } : q)))
+              }
+              placeholder="int(1, 100)"
+              spellCheck={false}
+            />
+            <button
+              className="del-btn"
+              onClick={() => setParts(parts.filter((_, j) => j !== i))}
+              title="删除该数"
+            >
+              ✕
+            </button>
+          </span>
+        );
+      })}
       <button
         onClick={() =>
           setParts([
@@ -188,12 +233,20 @@ function kindToExpr(kind: VarKind): string | null {
   }
 }
 
-function KindForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => void }) {
+function KindForm({
+  kind,
+  onKind,
+  nameTaken,
+}: {
+  kind: VarKind;
+  onKind: (k: VarKind) => void;
+  nameTaken?: (n: string) => boolean;
+}) {
   const key = Object.keys(kind)[0];
   const k = kind as Record<string, unknown>;
 
   if (key === "Multi") {
-    return <MultiForm kind={kind} onKind={onKind} />;
+    return <MultiForm kind={kind} onKind={onKind} nameTaken={nameTaken} />;
   }
   if (key === "Array") {
     const v = k.Array as { elem_type: ElemType };
@@ -248,7 +301,6 @@ function KindForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => voi
               <option value="1">连通</option>
               <option value="0">任意</option>
             </select>
-            <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, "w", w))} />
           </>
         )}
         {v.gtype === "BaseRing" && (
@@ -280,11 +332,24 @@ function KindForm({ kind, onKind }: { kind: VarKind; onKind: (k: VarKind) => voi
   return <TextFields kind={kind} onKind={onKind} />;
 }
 
-export default function VariableRow({ item, dragging, onName, onKind, onDelete, dragProps }: Props) {
+/** 允许"＋ 数"转多赋值的单行标量类型 */
+const MULTIABLE = new Set(["Int", "Float", "Scalar"]);
+
+export default function VariableRow({
+  item,
+  dragging,
+  onName,
+  onKind,
+  onDelete,
+  nameTaken,
+  dragProps,
+}: Props) {
   const isMulti = Object.keys(item.kind)[0] === "Multi";
+  const kindKey = Object.keys(item.kind)[0];
   const multiParts = isMulti
     ? (item.kind as { Multi: { parts: MultiPart[] } }).Multi.parts
     : [];
+  const nameErr = isMulti ? null : nameError(item.name, nameTaken);
 
   /** 名称框变更：多个名字（空格分隔）自动转为多赋值，单名字转回表达式变量 */
   const handleNameChange = (raw: string) => {
@@ -310,6 +375,21 @@ export default function VariableRow({ item, dragging, onName, onKind, onDelete, 
     onName(raw);
   };
 
+  /** 单值标量行"＋ 数"：转多赋值（保留当前值 + 新 part） */
+  const addNumber = () => {
+    const expr = kindToExpr(item.kind);
+    if (expr === null) return;
+    onKind({
+      Multi: {
+        rows: "1",
+        parts: [
+          { name: item.name, expr },
+          { name: "", expr: "int(1, 100)" },
+        ],
+      },
+    } as unknown as VarKind);
+  };
+
   return (
     <div
       className={`var-row${dragging ? " dragging" : ""}`}
@@ -318,15 +398,25 @@ export default function VariableRow({ item, dragging, onName, onKind, onDelete, 
     >
       <span className="drag-handle" title="拖拽排序">⠿</span>
       <input
-        className="name-input"
+        className={`name-input${nameErr ? " invalid" : ""}`}
         value={isMulti ? multiParts.map((p) => p.name).join(" ") : item.name}
         onChange={(e) => handleNameChange(e.target.value)}
         placeholder={isMulti ? "多个名字（空格分隔）" : "变量名"}
-        title={isMulti ? "空格分隔多个名字，每名一个数" : "可输入多个名字（空格分隔）实现一行多个数"}
+        title={
+          nameErr ??
+          (isMulti
+            ? "空格分隔多个名字，每名一个数"
+            : "可输入多个名字（空格分隔）实现一行多个数")
+        }
         spellCheck={false}
       />
       <span className="kind-badge">{kindLabel(item.kind)}</span>
-      <KindForm kind={item.kind} onKind={onKind} />
+      <KindForm kind={item.kind} onKind={onKind} nameTaken={nameTaken} />
+      {MULTIABLE.has(kindKey) && (
+        <button onClick={addNumber} title="添加第二个数（转一行多赋值）">
+          ＋ 数
+        </button>
+      )}
       <button className="del-btn" onClick={onDelete} title="删除变量">✕</button>
     </div>
   );

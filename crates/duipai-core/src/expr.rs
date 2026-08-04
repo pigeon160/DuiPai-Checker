@@ -111,7 +111,7 @@ pub fn tokenize(src: &str) -> DslResult<Vec<Tok>> {
                     i += 1;
                 }
             }
-            b'+' | b'-' | b'%' | b'(' | b')' | b'=' | b':' => {
+            b'+' | b'-' | b'%' | b'(' | b')' | b'=' | b':' | b'[' | b']' => {
                 toks.push(Tok::Op((c as char).to_string()));
                 i += 1;
             }
@@ -128,6 +128,15 @@ pub fn tokenize(src: &str) -> DslResult<Vec<Tok>> {
     Ok(toks)
 }
 
+/// 表达式求值环境中的值：标量 / 数组网格（供 `a[i]` / `a[i][j]` 索引引用）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnvValue {
+    /// 标量（int/float/表达式/多赋值项/perm·tree·graph 的规模值）
+    Scalar(f64),
+    /// 数组元素网格（行优先）；单行数组 1 行，matrix 多行
+    Grid(Vec<Vec<f64>>),
+}
+
 /// 表达式 AST。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprNode {
@@ -135,6 +144,8 @@ pub enum ExprNode {
     Name(String),
     Str(String),
     Call { name: String, args: Vec<ExprNode> },
+    /// 数组索引：`a[i]` / `a[i][j]`（1 起）
+    Index { name: String, indices: Vec<ExprNode> },
     Neg(Box<ExprNode>),
     Bin { op: BinOp, l: Box<ExprNode>, r: Box<ExprNode> },
 }
@@ -268,6 +279,19 @@ impl<'a> ExprParser<'a> {
             Some(Tok::Name(n)) => {
                 let name = n.clone();
                 self.pos += 1;
+                // 数组索引链：a[i][j]
+                if matches!(self.peek(), Some(Tok::Op(s)) if s == "[") {
+                    let mut indices = Vec::new();
+                    while matches!(self.peek(), Some(Tok::Op(s)) if s == "[") {
+                        self.pos += 1;
+                        let idx = self.parse_expr()?;
+                        if !self.expect_op("]") {
+                            return Err(DslError::bare("缺少右方括号 ]"));
+                        }
+                        indices.push(idx);
+                    }
+                    return Ok(ExprNode::Index { name, indices });
+                }
                 // 函数调用：name( ... )
                 if matches!(self.peek(), Some(Tok::Op(s)) if s == "(") {
                     self.pos += 1;
@@ -317,15 +341,63 @@ pub fn parse_expr(src: &str) -> DslResult<ExprNode> {
 /// 由调用方注入以便将来接入种子随机数。
 pub fn eval_node(
     node: &ExprNode,
-    env: &std::collections::HashMap<String, f64>,
+    env: &std::collections::HashMap<String, EnvValue>,
     rng: &mut impl rand::Rng,
 ) -> DslResult<f64> {
     match node {
         ExprNode::Num(v) => Ok(*v),
-        ExprNode::Name(name) => env
-            .get(name)
-            .copied()
-            .ok_or_else(|| DslError::bare(format!("引用了未定义的变量：{name}"))),
+        ExprNode::Name(name) => match env.get(name) {
+            Some(EnvValue::Scalar(v)) => Ok(*v),
+            Some(EnvValue::Grid(_)) => Err(DslError::bare(format!(
+                "变量 {name} 是数组，请用 {name}[i] 索引引用"
+            ))),
+            None => Err(DslError::bare(format!("引用了未定义的变量：{name}"))),
+        },
+        ExprNode::Index { name, indices } => {
+            let grid = match env.get(name) {
+                Some(EnvValue::Grid(g)) => g,
+                Some(EnvValue::Scalar(_)) => {
+                    return Err(DslError::bare(format!("变量 {name} 不是数组")));
+                }
+                None => return Err(DslError::bare(format!("引用了未定义的变量：{name}"))),
+            };
+            let idx1 = eval_node(&indices[0], env, rng)? as i64;
+            if indices.len() == 1 {
+                // a[i]：单行数组取元素
+                if grid.len() != 1 {
+                    return Err(DslError::bare(format!(
+                        "矩阵 {name} 需要两个索引（{name}[i][j]）"
+                    )));
+                }
+                let row = &grid[0];
+                if idx1 < 1 || idx1 > row.len() as i64 {
+                    return Err(DslError::bare(format!(
+                        "索引 {name}[{idx1}] 越界（长度 {}）",
+                        row.len()
+                    )));
+                }
+                return Ok(row[(idx1 - 1) as usize]);
+            }
+            if indices.len() != 2 {
+                return Err(DslError::bare(format!("{name} 索引层数过多（最多两层）")));
+            }
+            // a[i][j]：矩阵取行列
+            if idx1 < 1 || idx1 > grid.len() as i64 {
+                return Err(DslError::bare(format!(
+                    "索引 {name}[{idx1}] 越界（第 1 维长度 {}）",
+                    grid.len()
+                )));
+            }
+            let row = &grid[(idx1 - 1) as usize];
+            let idx2 = eval_node(&indices[1], env, rng)? as i64;
+            if idx2 < 1 || idx2 > row.len() as i64 {
+                return Err(DslError::bare(format!(
+                    "索引 {name}[{idx1}][{idx2}] 越界（第 2 维长度 {}）",
+                    row.len()
+                )));
+            }
+            Ok(row[(idx2 - 1) as usize])
+        }
         ExprNode::Str(_) => Err(DslError::bare("未知 AST 节点")),
         ExprNode::Neg(n) => Ok(-eval_node(n, env, rng)?),
         ExprNode::Bin { op, l, r } => {
@@ -385,6 +457,12 @@ pub fn eval_node(
 pub fn collect_names(node: &ExprNode, out: &mut Vec<String>) {
     match node {
         ExprNode::Name(n) => out.push(n.clone()),
+        ExprNode::Index { name, indices } => {
+            out.push(name.clone());
+            for i in indices {
+                collect_names(i, out);
+            }
+        }
         ExprNode::Neg(x) => collect_names(x, out),
         ExprNode::Bin { l, r, .. } => {
             collect_names(l, out);
@@ -403,7 +481,7 @@ pub fn collect_names(node: &ExprNode, out: &mut Vec<String>) {
 /// `表达式 {src:?} 语法错误：...`，求值错误原样抛出。
 pub fn eval_expr(
     src: &str,
-    env: &std::collections::HashMap<String, f64>,
+    env: &std::collections::HashMap<String, EnvValue>,
     rng: &mut impl rand::Rng,
 ) -> DslResult<f64> {
     let node = parse_expr(src)?;

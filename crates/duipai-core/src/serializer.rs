@@ -25,7 +25,7 @@ fn fmt_weight(w: &Weight) -> String {
 
 /// 判断 array 的 rows 是否恒为 1（单行数组 -> ints/floats，否则 matrix/matf）。
 /// 结构化判断：常量 1 或 `int(1, 1)`；不做随机求值（避免 int(1,5) 碰巧得 1）。
-fn is_single_row(rows: &str) -> bool {
+pub fn is_single_row(rows: &str) -> bool {
     let Ok(node) = parse_expr(rows) else {
         return false;
     };

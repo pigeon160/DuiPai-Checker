@@ -59,6 +59,8 @@ export default function App() {
   itemsRef.current = items;
   const dslRef = useRef(dsl);
   dslRef.current = dsl;
+  // 当前 DSL 是否有错（有错时 GUI→DSL 同步跳过，保留错误文本供修改）
+  const dslHasErrorsRef = useRef(false);
 
   // 面板折叠 / 拖拽高度（localStorage 持久化）
   const [collapsed, setCollapsed] = useState<boolean[]>(() =>
@@ -121,9 +123,9 @@ export default function App() {
       .finally(() => setReady(true));
   }, []);
 
-  // 图形化 -> DSL（防抖 300ms；用户聚焦 DSL 编辑器时不覆盖）
+  // 图形化 -> DSL（防抖 300ms；编辑器聚焦或 DSL 有错时不覆盖）
   useEffect(() => {
-    if (!ready || editorFocused) return;
+    if (!ready || editorFocused || dslHasErrorsRef.current) return;
     const t = setTimeout(async () => {
       try {
         const cfg: Config = {
@@ -145,8 +147,10 @@ export default function App() {
       try {
         const r = await dslParseChecked(dsl);
         setErrors(r.errors);
+        dslHasErrorsRef.current = r.errors.length > 0;
       } catch (e) {
         setErrors([e as DslError]);
+        dslHasErrorsRef.current = true;
       }
     }, 400);
     return () => clearTimeout(t);

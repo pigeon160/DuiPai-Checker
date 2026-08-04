@@ -18,7 +18,7 @@ pub use check::{
     ProgramSpec,
 };
 pub use error::{DslError, DslResult};
-pub use expr::{collect_names, eval_expr, parse_expr, tokenize, ExprNode, Tok};
+pub use expr::{collect_names, eval_expr, parse_expr, tokenize, EnvValue, ExprNode, Tok};
 pub use generator::{format_float, generate};
 pub use parser::{parse, KNOWN_COMMANDS};
 pub use runner::{

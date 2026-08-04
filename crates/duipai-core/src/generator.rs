@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::ast::{Config, ElemType, GraphType, VarKind, Weight};
 use crate::error::{DslError, DslResult};
-use crate::expr::eval_expr;
+use crate::expr::{eval_expr, EnvValue};
 use rand::rngs::StdRng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{Rng, SeedableRng};
@@ -24,7 +24,7 @@ pub fn format_float(v: f64, prec: i64) -> String {
 }
 
 struct GenCtx<'a> {
-    env: HashMap<String, f64>,
+    env: HashMap<String, EnvValue>,
     rng: &'a mut StdRng,
 }
 
@@ -236,7 +236,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
             }
             let value = ctx.int(lo, hi);
             lines.push(value.to_string());
-            ctx.env.insert(name.clone(), value as f64);
+            ctx.env.insert(name.clone(), EnvValue::Scalar(value as f64));
         }
         VarKind::Multi { rows, parts } => {
             let rows_n = ctx.ev(rows, "重复行数")? as i64;
@@ -248,7 +248,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                 for p in parts {
                     let value = ctx.ev(&p.expr, "表达式")?;
                     row.push(format_float(value, 12));
-                    ctx.env.insert(p.name.clone(), value);
+                    ctx.env.insert(p.name.clone(), EnvValue::Scalar(value));
                 }
                 lines.push(row.join(" "));
             }
@@ -256,7 +256,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
         VarKind::Scalar { expr } => {
             let value = ctx.ev(expr, "表达式")?;
             lines.push(format_float(value, 12));
-            ctx.env.insert(name.clone(), value);
+            ctx.env.insert(name.clone(), EnvValue::Scalar(value));
         }
         VarKind::Float { min, max, prec } => {
             let lo = ctx.ev(min, "浮点数变量范围")?;
@@ -270,7 +270,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
             }
             let value = ctx.uniform(lo, hi);
             lines.push(format_float(value, prec));
-            ctx.env.insert(name.clone(), value);
+            ctx.env.insert(name.clone(), EnvValue::Scalar(value));
         }
         VarKind::Array { elem_type, el_min, el_max, prec, rows, cols } => {
             let rows_n = ctx.ev(rows, "数组行数")? as i64;
@@ -291,22 +291,30 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                 if !(0..=15).contains(&prec) {
                     return Err(DslError::bare("数组元素精度应在 0~15 之间"));
                 }
+                let mut grid = Vec::with_capacity(rows_n as usize);
                 for _ in 0..rows_n {
-                    let row: Vec<String> =
-                        (0..cols_n).map(|_| format_float(ctx.uniform(lo, hi), prec)).collect();
-                    lines.push(row.join(" "));
+                    let row: Vec<f64> = (0..cols_n).map(|_| ctx.uniform(lo, hi)).collect();
+                    grid.push(row);
                 }
+                for row in &grid {
+                    lines.push(row.iter().map(|v| format_float(*v, prec)).collect::<Vec<_>>().join(" "));
+                }
+                ctx.env.insert(name.clone(), EnvValue::Grid(grid));
             } else {
                 let elo = ctx.ev(el_min, "数组元素范围")? as i64;
                 let ehi = ctx.ev(el_max, "数组元素范围")? as i64;
                 if elo > ehi {
                     return Err(DslError::bare("数组元素范围最小值不能大于最大值"));
                 }
+                let mut grid = Vec::with_capacity(rows_n as usize);
                 for _ in 0..rows_n {
-                    let row: Vec<String> =
-                        (0..cols_n).map(|_| ctx.int(elo, ehi).to_string()).collect();
-                    lines.push(row.join(" "));
+                    let row: Vec<f64> = (0..cols_n).map(|_| ctx.int(elo, ehi) as f64).collect();
+                    grid.push(row);
                 }
+                for row in &grid {
+                    lines.push(row.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
+                }
+                ctx.env.insert(name.clone(), EnvValue::Grid(grid));
             }
         }
         VarKind::String { rows, cols, charset } => {
@@ -381,7 +389,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
             let mut perm: Vec<i64> = (1..=n).collect();
             ctx.shuffle(&mut perm);
             lines.push(perm.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" "));
-            ctx.env.insert(name.clone(), n as f64);
+            ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
         }
         VarKind::Tree { n, w, val } => {
             let n = ctx.ev(n, "树顶点数")? as i64;
@@ -401,7 +409,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
             ctx.shuffle(&mut edges);
             out.extend(edges);
             lines.extend(out);
-            ctx.env.insert(name.clone(), n as f64);
+            ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
         }
         VarKind::Graph { gtype, n, m, directed, connected, k, w, val } => {
             match gtype {
@@ -411,7 +419,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                         return Err(DslError::bare("环顶点数 n 应 >= 3"));
                     }
                     graph_ring(ctx, n, w.as_ref(), val.as_ref(), lines)?;
-                    ctx.env.insert(name.clone(), n as f64);
+                    ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
                     return Ok(());
                 }
                 GraphType::BaseRing => {
@@ -424,7 +432,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                         return Err(DslError::bare("环大小 k 应在 3~n 之间"));
                     }
                     graph_base_ring(ctx, n, k, w.as_ref(), val.as_ref(), lines)?;
-                    ctx.env.insert(name.clone(), n as f64);
+                    ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
                     return Ok(());
                 }
                 GraphType::Dag => {
@@ -434,7 +442,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                         return Err(DslError::bare("图顶点数 n 应 >= 1"));
                     }
                     graph_dag(ctx, n, m, w.as_ref(), val.as_ref(), lines)?;
-                    ctx.env.insert(name.clone(), n as f64);
+                    ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
                     return Ok(());
                 }
                 GraphType::Bipartite => {
@@ -444,7 +452,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                         return Err(DslError::bare("图顶点数 n 应 >= 1"));
                     }
                     graph_bipartite(ctx, n, m, w.as_ref(), val.as_ref(), lines)?;
-                    ctx.env.insert(name.clone(), n as f64);
+                    ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
                     return Ok(());
                 }
                 GraphType::General => {}
@@ -532,7 +540,7 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                 out.push(edge_line(ctx, u, v, w.as_ref())?);
             }
             lines.extend(out);
-            ctx.env.insert(name.clone(), n as f64);
+            ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
         }
     }
     Ok(())

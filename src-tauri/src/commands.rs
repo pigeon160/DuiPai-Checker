@@ -76,6 +76,8 @@ pub fn dsl_serialize(config: Config) -> Result<String, DslError> {
 pub fn expr_eval(expr: String, env: HashMap<String, f64>) -> Result<f64, DslError> {
     safe(|| {
         let mut rng = rand::rng();
+        let env: HashMap<String, duipai_core::EnvValue> =
+            env.into_iter().map(|(k, v)| (k, duipai_core::EnvValue::Scalar(v))).collect();
         eval_expr(&expr, &env, &mut rng)
     })
 }

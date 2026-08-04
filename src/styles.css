@@ -254,6 +254,19 @@ select {
   width: 60px;
 }
 
+/* 非法输入红框提示 */
+input.invalid,
+.multi-part.invalid {
+  border-color: #cf222e;
+  background: #fff1f0;
+}
+
+.inline-err {
+  font-size: 11px;
+  color: #cf222e;
+  white-space: nowrap;
+}
+
 .weight-group {
   display: inline-flex;
   align-items: center;

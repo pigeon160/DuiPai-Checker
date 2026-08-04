@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 use crate::ast::{Config, ElemType, GraphType, VarKind, Weight};
 use crate::error::DslError;
-use crate::expr::{collect_names, eval_node, parse_expr};
+use crate::expr::{collect_names, eval_node, parse_expr, ExprNode};
+use crate::serializer::is_single_row;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -39,7 +40,122 @@ fn try_const(expr: &str) -> Result<Option<f64>, DslError> {
     Ok(Some(v))
 }
 
-/// 检查单个数值字段：语法 + 引用规则 + 类型匹配。
+/// 收集普通名字引用（跳过数组索引名，索引有专门检查）。
+fn collect_plain_names(node: &ExprNode, out: &mut Vec<String>) {
+    match node {
+        ExprNode::Name(n) => out.push(n.clone()),
+        ExprNode::Index { indices, .. } => {
+            for i in indices {
+                collect_plain_names(i, out);
+            }
+        }
+        ExprNode::Neg(x) => collect_plain_names(x, out),
+        ExprNode::Bin { l, r, .. } => {
+            collect_plain_names(l, out);
+            collect_plain_names(r, out);
+        }
+        ExprNode::Call { args, .. } => {
+            for a in args {
+                collect_plain_names(a, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 检查数组索引引用：层数匹配（单行 1 层 / 矩阵 2 层）、常量越界提前报错。
+fn check_indexes(
+    node: &ExprNode,
+    types: &HashMap<String, VarKind>,
+    errors: &mut Vec<DslError>,
+    line: usize,
+) {
+    match node {
+        ExprNode::Index { name, indices } => {
+            match types.get(name) {
+                Some(VarKind::Array { rows, cols, .. }) => {
+                    let single = is_single_row(rows);
+                    let want = if single { 1 } else { 2 };
+                    if indices.len() != want {
+                        errors.push(DslError::at(
+                            line,
+                            format!(
+                                "索引层数错误：{name} 是{}数组，需要 {want} 个索引（{}）",
+                                if single { "单行" } else { "矩阵" },
+                                if want == 1 { "{name}[i]" } else { "{name}[i][j]" }
+                            ),
+                        ));
+                    } else {
+                        let dims = if single { vec![cols.as_str()] } else { vec![rows.as_str(), cols.as_str()] };
+                        for (k, (idx_node, dim_expr)) in indices.iter().zip(dims).enumerate() {
+                            let idx_text = expr_text_of(idx_node);
+                            if idx_text.is_empty() {
+                                continue;
+                            }
+                            if let (Ok(Some(dim)), Ok(Some(iv))) = (try_const(dim_expr), try_const(&idx_text)) {
+                                if iv < 1.0 || iv > dim {
+                                    errors.push(DslError::at(
+                                        line,
+                                        format!("索引 {name} 第 {} 维越界：{iv}（长度 {dim}）", k + 1),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(_) => {
+                    errors.push(DslError::at(line, format!("变量 {name} 不是数组，不能索引引用")));
+                }
+                None => {
+                    errors.push(DslError::at(
+                        line,
+                        format!("引用了未定义的变量：{name}"),
+                    ));
+                }
+            }
+            for i in indices {
+                check_indexes(i, types, errors, line);
+            }
+        }
+        ExprNode::Neg(x) => check_indexes(x, types, errors, line),
+        ExprNode::Bin { l, r, .. } => {
+            check_indexes(l, types, errors, line);
+            check_indexes(r, types, errors, line);
+        }
+        ExprNode::Call { args, .. } => {
+            for a in args {
+                check_indexes(a, types, errors, line);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// AST 节点转表达式文本（常量求值用）。
+fn expr_text_of(node: &ExprNode) -> String {
+    match node {
+        ExprNode::Num(v) => v.to_string(),
+        ExprNode::Name(n) => n.clone(),
+        ExprNode::Neg(x) => format!("-{}", expr_text_of(x)),
+        ExprNode::Bin { op, l, r } => format!(
+            "({} {} {})",
+            expr_text_of(l),
+            match op {
+                crate::expr::BinOp::Add => "+",
+                crate::expr::BinOp::Sub => "-",
+                crate::expr::BinOp::Mul => "*",
+                crate::expr::BinOp::Div => "/",
+                crate::expr::BinOp::FloorDiv => "//",
+                crate::expr::BinOp::Mod => "%",
+                crate::expr::BinOp::Pow => "**",
+            },
+            expr_text_of(r)
+        ),
+        _ => String::new(),
+    }
+}
+
+/// 检查单个数值字段：语法 + 引用规则 + 类型匹配 + 数组索引。
 fn check_field(expr: &str, label: &str, types: &HashMap<String, VarKind>, errors: &mut Vec<DslError>, line: usize) {
     let node = match parse_expr(expr) {
         Ok(n) => n,
@@ -49,7 +165,7 @@ fn check_field(expr: &str, label: &str, types: &HashMap<String, VarKind>, errors
         }
     };
     let mut names = Vec::new();
-    collect_names(&node, &mut names);
+    collect_plain_names(&node, &mut names);
     for name in names {
         match types.get(&name) {
             None => errors.push(DslError::at(
@@ -63,6 +179,7 @@ fn check_field(expr: &str, label: &str, types: &HashMap<String, VarKind>, errors
             Some(_) => {}
         }
     }
+    check_indexes(&node, types, errors, line);
 }
 
 /// 对两个表达式做常量值域检查（lo <= hi）。
