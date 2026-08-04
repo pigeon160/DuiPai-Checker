@@ -56,10 +56,15 @@ export default function App() {
   dslRef.current = dsl;
 
   // 面板折叠 / 拖拽高度（localStorage 持久化）
-  const [collapsed, setCollapsed] = useState<boolean[]>(() =>
-    loadJson(COLLAPSED_KEY, Array(PANEL_COUNT).fill(false)),
-  );
-  const [heights, setHeights] = useState<(number | null)[]>(Array(PANEL_COUNT).fill(null));
+  // 旧版本可能存了更少面板的数组：长度不符时整体重置，避免折叠/拖拽失效
+  const [collapsed, setCollapsed] = useState<boolean[]>(() => {
+    const c = loadJson(COLLAPSED_KEY, Array(PANEL_COUNT).fill(false));
+    return c.length === PANEL_COUNT ? c : Array(PANEL_COUNT).fill(false);
+  });
+  const [heights, setHeights] = useState<(number | null)[]>(() => {
+    const h = loadJson(HEIGHTS_KEY, Array(PANEL_COUNT).fill(null));
+    return h.length === PANEL_COUNT ? h : Array(PANEL_COUNT).fill(null);
+  });
   useEffect(() => {
     localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
   }, [collapsed]);
@@ -245,12 +250,17 @@ export default function App() {
 
         <Panel
           id={2}
-          title="数据生成预览"
+          title="自然语言 → DSL"
           basis={heights[2]}
           collapsed={collapsed[2]}
           onToggle={() => togglePanel(2)}
         >
-          <GeneratePanel config={buildConfig()} genMode={genMode} ext={genMode === "External" ? ext : null} />
+          <NlPanel
+            onLoadDsl={(dslText) => {
+              setDsl(dslText);
+              setEditorFocused(false);
+            }}
+          />
         </Panel>
         <SplitHandle
           onResize={resizePanel(2)}
@@ -260,18 +270,12 @@ export default function App() {
 
         <Panel
           id={3}
-          title="对拍"
+          title="数据生成预览"
           basis={heights[3]}
           collapsed={collapsed[3]}
           onToggle={() => togglePanel(3)}
         >
-          <CheckPanel
-            config={buildConfig()}
-            genMode={genMode}
-            ext={ext}
-            onGenMode={setGenMode}
-            onExt={setExt}
-          />
+          <GeneratePanel config={buildConfig()} genMode={genMode} ext={genMode === "External" ? ext : null} />
         </Panel>
         <SplitHandle
           onResize={resizePanel(3)}
@@ -281,16 +285,17 @@ export default function App() {
 
         <Panel
           id={4}
-          title="自然语言 → DSL"
+          title="对拍"
           basis={heights[4]}
           collapsed={collapsed[4]}
           onToggle={() => togglePanel(4)}
         >
-          <NlPanel
-            onLoadDsl={(dslText) => {
-              setDsl(dslText);
-              setEditorFocused(false);
-            }}
+          <CheckPanel
+            config={buildConfig()}
+            genMode={genMode}
+            ext={ext}
+            onGenMode={setGenMode}
+            onExt={setExt}
           />
         </Panel>
       </main>
