@@ -221,7 +221,7 @@ fn err_extra_close_paren_no_panic() {
         "a = ints(3, 1, 9))",
         "a = ints((3, 1, 9))",
         "a = ints(3), 9)",
-        "t = tree(5, w=int(1, 10)))",
+        "t = tree(5, int(1, 10)))",
         "a = ints(3, ))",
         "line:\n    int n: 1, 2))",
     ] {
@@ -250,7 +250,7 @@ fn err_wrong_arity() {
 
 #[test]
 fn err_kw_dup() {
-    let e = parse("t = tree(5, w=int(1,2), w=int(3,4))").expect_err("should fail");
+    let e = parse("t = tree(5, type=\"star\", type=\"chain\")").expect_err("should fail");
     assert!(e.message.contains("关键字参数重复"), "{e}");
 }
 
@@ -446,7 +446,7 @@ line:
 a = ints(n, 1, 100)
 p = perm(n)
 t = tree(n, int(1, 10))
-g = graph(n, 50, 1, 1, w=int(1, 9))
+g = graph(n, 50, 1, 1, int(1, 9))
 r = ring(n)
 br = base_ring(n, 3)
 ";
@@ -457,7 +457,7 @@ br = base_ring(n, 3)
 
 #[test]
 fn validate_bad_weight_range() {
-    let cfg = parse("t = tree(5, w=float(9, 1))").expect("parse");
+    let cfg = parse("t = tree(5, float(9, 1))").expect("parse");
     let errs = validate(&cfg);
     assert!(errs.iter().any(|e| e.message.contains("最小值不能大于最大值")), "{errs:?}");
 }
@@ -769,6 +769,32 @@ fn val_removed_rejected() {
     assert!(e.message.contains("已移除"), "{e}");
     let e = parse("g = graph(5, 5, 1, 0, val=int(1, 9))\n").expect_err("val removed");
     assert!(e.message.contains("已移除"), "{e}");
+}
+
+#[test]
+fn kw_weight_retired() {
+    for text in [
+        "t = tree(5, w=int(1, 9))\n",
+        "r = ring(5, w=int(1, 9))\n",
+        "br = base_ring(5, 3, w=int(1, 9))\n",
+        "g = graph(5, 5, 1, 0, w=int(1, 9))\n",
+    ] {
+        let e = parse(text).expect_err("w= retired");
+        assert!(e.message.contains("已废弃"), "{text} -> {e}");
+    }
+    // 位置参数仍可用
+    parse("t = tree(5, int(1, 9))\n").expect("positional ok");
+}
+
+#[test]
+fn kw_prec_retired() {
+    let e = parse("a = ints(3, 1, 9, prec=2)\n").expect_err("prec= retired");
+    assert!(e.message.contains("已废弃"), "{e}");
+    let e = parse("M = matf(3, 3, 0, 1, prec=4)\n").expect_err("prec= retired");
+    assert!(e.message.contains("已废弃"), "{e}");
+    // 位置参数仍可用
+    parse("a = ints(3, 1, 9, 2)\n").expect("positional ok");
+    parse("M = matf(3, 3, 0, 1, 4)\n").expect("positional ok");
 }
 
 #[test]

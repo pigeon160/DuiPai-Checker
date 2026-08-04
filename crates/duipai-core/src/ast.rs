@@ -132,13 +132,13 @@ pub enum VarKind {
         ylo: String,
         yhi: String,
     },
-    /// 树：`t = tree(n[, type=...][, w=...])`（type: star 菊花图 / chain 链）
+    /// 树：`t = tree(n[, type=...][, 边权])`（type: star 菊花图 / chain 链）
     Tree {
         n: String,
         ttype: TreeType,
         w: Option<Weight>,
     },
-    /// 图：`g = graph(n, m, directed, connected[, multi=1][, loop=1][, type=...][, w=...])`
+    /// 图：`g = graph(n, m, directed, connected[, multi=1][, loop=1][, type=...][, 边权])`
     Graph {
         gtype: GraphType,
         n: String,

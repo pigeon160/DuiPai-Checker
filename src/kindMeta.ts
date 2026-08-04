@@ -195,11 +195,11 @@ export function setGtype(kind: VarKind, gtype: string): VarKind {
   return { Graph: inner } as unknown as VarKind;
 }
 
-export function setWeight(kind: VarKind, which: "w" | "val", w: Weight | null): VarKind {
+export function setWeight(kind: VarKind, w: Weight | null): VarKind {
   const k = kind as Record<string, unknown>;
   const entry = Object.entries(k)[0];
   const [kname, inner] = entry;
-  const clone = { ...(inner as Record<string, unknown>), [which]: w };
+  const clone = { ...(inner as Record<string, unknown>), w };
   return { [kname]: clone } as unknown as VarKind;
 }
 

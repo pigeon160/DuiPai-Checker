@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import type { Item, LineItem, LineItemKind, VarKind, Weight, ElemType } from "../api";
 import { exprEval } from "../api";
 import {
@@ -590,7 +590,7 @@ function KindForm({
             )}
           </>
         )}
-        <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, "w", w))} />
+        <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, w))} />
       </>
     );
   }
@@ -608,7 +608,7 @@ function KindForm({
           <option value="Chain">链</option>
         </select>
         <TextFields kind={kind} onKind={onKind} />
-        <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, "w", w))} />
+        <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, w))} />
       </>
     );
   }

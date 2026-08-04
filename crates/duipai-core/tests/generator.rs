@@ -20,8 +20,8 @@ line:
     float x: 0, 1, 4
 a = ints(n, 1, 100)
 p = perm(n)
-t = tree(n, w=int(1, 10))
-g = graph(n, 50, 1, 0, w=int(1, 9))
+t = tree(n, int(1, 10))
+g = graph(n, 50, 1, 0, int(1, 9))
 r = ring(5)
 br = base_ring(n, 3)
 ";
@@ -61,7 +61,7 @@ fn perm_output() {
 
 #[test]
 fn tree_shape() {
-    let cfg = parse("t = tree(6, w=int(1, 5))\n").unwrap();
+    let cfg = parse("t = tree(6, int(1, 5))\n").unwrap();
     let lines = generate(&cfg, Some(3)).unwrap();
     assert_eq!(lines.len(), 5, "无规模行，只输出 5 条边：{lines:?}");
     for l in &lines {
@@ -94,7 +94,7 @@ fn tree_star_chain() {
 
 #[test]
 fn graph_general_shape() {
-    let cfg = parse("g = graph(5, 6, 0, 1, w=int(1, 3))\n").unwrap();
+    let cfg = parse("g = graph(5, 6, 0, 1, int(1, 3))\n").unwrap();
     let lines = generate(&cfg, Some(5)).unwrap();
     assert_eq!(lines.len(), 6, "无规模行，只输出 6 条边：{lines:?}");
     // 连通无向图，每条边无自环

@@ -20,7 +20,7 @@ t = tree(n, int(1, 10))
   **必须**放在行块内，顶层写会报错引导
 - 顶层命令：`ints` `floats` `matrix` `matf` `perm` `binseq` `intervals` `points`
   `tree` `graph` `ring` `base_ring`（`name = 命令(...)`）
-- 已废弃：`int` `float` `str` 顶层写法（改为行内项）
+- 已废弃写法见文末「已废弃」一节
 
 ## 行内项（类型 名字: 参数）
 
@@ -84,8 +84,7 @@ line:
 
 图命令参数：`graph(n, m, directed, connected[, multi=1][, loop=1][, type=…][, 边权])`，
 `directed`/`connected`/`multi`/`loop` 用 1/0（或 true/false）。
-边权直接写范围调用（位置参数）：`int(1, 10)` / `float(0, 1, 4)`。
-节点权值 `val=` 已移除。
+边权直接写范围调用（位置参数）：`int(1, 10)` / `float(0, 1, 4)`；写 `none` 明确表示无边权。
 
 ### 重边与自环
 
@@ -121,3 +120,15 @@ a = ints(n, 1, 100)
 引用规则、常量值域（如 `int n: 5, 4`）、数组索引层数与常量越界、
 图边数上限（含自环/重边选项）、点个数超坐标组合数、菊花图 n≥2 等。
 含变量引用的范围在生成期动态检查。
+
+## 已废弃写法
+
+以下写法会被解析器报错拒绝（错误信息中文，指向替代写法）：
+
+| 废弃写法 | 替代写法 |
+| --- | --- |
+| 顶层写 `int` / `float` / `str`（如 `n = int(1, 100)`） | 放入行块：`line:` + `int n: 1, 100` |
+| 顶层写 `text` / `expr` | 同上（text/expr 均为行内项） |
+| 节点权值 `val=int(1, 9)`（tree/graph 等） | 已移除（树/图只输出边） |
+| 边权 `w=int(1, 9)`（tree/graph/ring/base_ring） | 位置参数：`tree(5, int(1, 9))` |
+| 精度 `prec=6`（ints/floats/matrix/matf） | 位置参数：`ints(3, 1, 9, 6)` |

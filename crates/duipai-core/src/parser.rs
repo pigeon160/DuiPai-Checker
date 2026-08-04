@@ -179,7 +179,7 @@ fn is_range_call(toks: &[Tok], fname: &str) -> Option<Vec<String>> {
     Some(inner.iter().map(|x| expr_text(x)).collect())
 }
 
-/// 边权 / 节点权值参数 token -> 权值描述。`none` 或空表示无。
+/// 边权参数 token -> 权值描述。`none` 或空表示无。
 fn weight_to_item(toks: &[Tok]) -> DslResult<Option<Weight>> {
     if toks.is_empty() {
         return Ok(None);
@@ -208,12 +208,6 @@ fn weight_to_item(toks: &[Tok]) -> DslResult<Option<Weight>> {
     ))
 }
 
-/// 解析 `w=` / `val=` 关键字参数（值为表达式文本）。
-fn weight_from_kw(v: &str) -> DslResult<Option<Weight>> {
-    let toks = tokenize(v)?;
-    weight_to_item(&toks)
-}
-
 /// 解析顶层命令的参数为统一类型（不处理变量名）。
 fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
     let (pos, kw) = split_kw_args(args)?;
@@ -233,34 +227,36 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
     let item = match cmd {
         "ints" | "floats" => {
             arity(&pos, 3, 4)?;
+            if kw.contains_key("prec") {
+                return Err(DslError::bare("精度 prec= 已废弃：请用位置参数（ints(n, 1, 9, 6)）"));
+            }
             VarKind::Array {
                 elem_type: if cmd == "ints" { ElemType::Int } else { ElemType::Float },
                 el_min: expr_text(&pos[1]),
                 el_max: expr_text(&pos[2]),
-                prec: kw_expr("prec").unwrap_or_else(|| {
-                    if pos.len() == 4 {
-                        expr_text(&pos[3])
-                    } else {
-                        "6".to_string()
-                    }
-                }),
+                prec: if pos.len() == 4 {
+                    expr_text(&pos[3])
+                } else {
+                    "6".to_string()
+                },
                 rows: "1".to_string(),
                 cols: expr_text(&pos[0]),
             }
         }
         "matrix" | "matf" => {
             arity(&pos, 4, 5)?;
+            if kw.contains_key("prec") {
+                return Err(DslError::bare("精度 prec= 已废弃：请用位置参数（matrix(rows, cols, 0, 1, 6)）"));
+            }
             VarKind::Array {
                 elem_type: if cmd == "matrix" { ElemType::Int } else { ElemType::Float },
                 el_min: expr_text(&pos[2]),
                 el_max: expr_text(&pos[3]),
-                prec: kw_expr("prec").unwrap_or_else(|| {
-                    if pos.len() == 5 {
-                        expr_text(&pos[4])
-                    } else {
-                        "6".to_string()
-                    }
-                }),
+                prec: if pos.len() == 5 {
+                    expr_text(&pos[4])
+                } else {
+                    "6".to_string()
+                },
                 rows: expr_text(&pos[0]),
                 cols: expr_text(&pos[1]),
             }
@@ -308,8 +304,8 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
             if pos.len() == 2 {
                 w = weight_to_item(&pos[1])?;
             }
-            if let Some(v) = kw_expr("w") {
-                w = weight_from_kw(&v)?;
+            if kw.contains_key("w") {
+                return Err(DslError::bare("边权 w= 已废弃：请用位置参数（tree(n, int(1,10))）"));
             }
             if kw.contains_key("val") {
                 return Err(DslError::bare("节点权值 val= 已移除（树/图只输出边）"));
@@ -325,8 +321,11 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
             if pos.len() == 2 {
                 w = weight_to_item(&pos[1])?;
             }
-            if let Some(v) = kw_expr("w") {
-                w = weight_from_kw(&v)?;
+            if kw.contains_key("w") {
+                return Err(DslError::bare("边权 w= 已废弃：请用位置参数（ring(n, int(1,10))）"));
+            }
+            if kw.contains_key("val") {
+                return Err(DslError::bare("节点权值 val= 已移除（树/图只输出边）"));
             }
             VarKind::Graph {
                 gtype: GraphType::Ring,
@@ -349,8 +348,11 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
             if pos.len() == 3 {
                 w = weight_to_item(&pos[2])?;
             }
-            if let Some(v) = kw_expr("w") {
-                w = weight_from_kw(&v)?;
+            if kw.contains_key("w") {
+                return Err(DslError::bare("边权 w= 已废弃：请用位置参数（base_ring(n, k, int(1,10))）"));
+            }
+            if kw.contains_key("val") {
+                return Err(DslError::bare("节点权值 val= 已移除（树/图只输出边）"));
             }
             VarKind::Graph {
                 gtype: GraphType::BaseRing,
@@ -398,8 +400,8 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
             if pos.len() == 5 {
                 w = weight_to_item(&pos[4])?;
             }
-            if let Some(v) = kw_expr("w") {
-                w = weight_from_kw(&v)?;
+            if kw.contains_key("w") {
+                return Err(DslError::bare("边权 w= 已废弃：请用位置参数（graph(n, m, d, c, int(1,10))）"));
             }
             VarKind::Graph {
                 gtype,
