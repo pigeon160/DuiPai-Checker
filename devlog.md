@@ -520,3 +520,11 @@
 - parser 重名检测与 validate 类型环境均按作用域快照处理
 - 前端：repeat 行内嵌变量列表（块内添加/编辑/移动/删除/拖拽），顶层下拉可选 repeat 类型
 - 测试 129 全绿（新增 repeat_multiple_and_mixed / repeat_scope_isolation）
+## v1.0.0 发布（2026-08-05）
+
+- 修复子进程弹窗：compile_cpp / model_download(curl) 加 CREATE_NO_WINDOW——
+  对拍编译与模型下载不再弹命令行窗口（主程序 release 构建本就 windows_subsystem）
+- tauri.conf bundle 启用（NSIS 安装包），版本 1.0.0（Cargo.toml 同步）
+- 安装包：对拍检查器_1.0.0_x64-setup.exe（~5.2MB）
+- 构建要点：tauri 校验 NSIS 缓存需官方 zip（含 Bin/makensis.exe 等）+ 单独下载
+  nsis_tauri_utils-v0.5.3 插件（SHA1 75197FEE...）放到 Plugins/x86-unicode/additional/

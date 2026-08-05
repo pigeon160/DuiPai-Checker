@@ -83,3 +83,9 @@ t = tree(n, int(1, 10))
 
 五面板（可折叠/拖拽调高）：图形化变量列表 / DSL 编辑器 / 数据生成预览 /
 对拍 / 自然语言 → DSL。
+
+## 安装
+
+- **v1.0.0 起提供安装包**：GitHub Releases 下载
+  `duipai-checker_<版本>_x64-setup.exe`（NSIS 安装包，安装后打开不弹命令行窗口）
+- 开发模式：`npm install` + `npm run tauri dev`（需 Rust 工具链）
