@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   generateData,
   runProgramIpc,
@@ -22,6 +22,14 @@ export default function GeneratePanel({ config, genMode, ext }: Props) {
   const [error, setError] = useState<DslError | null>(null);
   const [loading, setLoading] = useState(false);
   const lastConfigRef = useRef("");
+  const outputRef = useRef<HTMLPreElement>(null);
+
+  // 生成结果自动滚动到底部（大输出时无需手动下拉）
+  useEffect(() => {
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [output]);
 
   const parseSeed = (): number | null => {
     if (seed.trim() === "") return null;
@@ -135,7 +143,7 @@ export default function GeneratePanel({ config, genMode, ext }: Props) {
         {stale && <span className="stale-hint">配置已变，请重新生成</span>}
       </div>
       {error && <div className="gen-error">{error.message}</div>}
-      <pre className="gen-output">{output}</pre>
+      <pre className="gen-output" ref={outputRef}>{output}</pre>
     </div>
   );
 }

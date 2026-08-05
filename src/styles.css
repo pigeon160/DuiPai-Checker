@@ -826,3 +826,19 @@ input.invalid,
 .repeat-label { font-size: 13px; color: var(--text-2); }
 .toolbar-select { max-width: 170px; height: 30px; font-size: 13px; }
 .save-name-input { width: 90px; height: 28px; font-size: 13px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 6px; }
+.check-history {
+  margin-top: 8px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: #fafbfc; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.check-history-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--text-2); font-weight: 600; margin-bottom: 2px;
+}
+.history-line {
+  display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text);
+  font-family: Consolas, "Courier New", monospace;
+}
+.history-time { color: var(--text-2); }
+.history-total { color: var(--text-2); }
+.history-reason { color: var(--warn); }
+.history-fail { color: var(--accent); }

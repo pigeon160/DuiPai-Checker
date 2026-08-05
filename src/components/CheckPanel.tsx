@@ -24,6 +24,32 @@ interface Props {
 
 const EMPTY_STATS: CheckStats = { pass: 0, wa: 0, tle: 0, re: 0, mle: 0, error: 0, tested: 0 };
 
+const HISTORY_KEY = "duipai_check_history";
+const HISTORY_MAX = 20;
+
+interface HistoryEntry {
+  time: string;
+  pass: number;
+  wa: number;
+  tle: number;
+  re: number;
+  mle: number;
+  error: number;
+  tested: number;
+  total: number;
+  reason: string;
+  fail_dir: string | null;
+}
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? (JSON.parse(raw) as HistoryEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function ProgramRow({
   label,
   spec,
@@ -92,7 +118,10 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
   const [stats, setStats] = useState<CheckStats>(EMPTY_STATS);
   const [error, setError] = useState<string>("");
   const [preview, setPreview] = useState<{ path: string; content: string } | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
   const logBoxRef = useRef<HTMLDivElement>(null);
+  const totalRef = useRef(100);
+  totalRef.current = total.trim() === "" ? 100 : Number(total.trim()) || 100;
   const configRef = useRef(config);
   configRef.current = config;
   const solRef = useRef(sol);
@@ -123,6 +152,25 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
           `  通过：${e.stats.pass}    不一致(WA)：${e.stats.wa}    超时(TLE)：${e.stats.tle}    内存超限(MLE)：${e.stats.mle}    运行错误(RE/Error)：${errs}`,
           ...(e.fail_dir ? [`现场已保存：${e.fail_dir}`] : []),
         ]);
+        // 历史记录（localStorage，上限 20 条滚动淘汰）
+        const entry: HistoryEntry = {
+          time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+          pass: e.stats.pass,
+          wa: e.stats.wa,
+          tle: e.stats.tle,
+          re: e.stats.re,
+          mle: e.stats.mle,
+          error: e.stats.error,
+          tested: e.tested,
+          total: totalRef.current,
+          reason: e.reason,
+          fail_dir: e.fail_dir,
+        };
+        setHistory((h) => {
+          const next = [entry, ...h].slice(0, HISTORY_MAX);
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+          return next;
+        });
       }
     }).then((u) => {
       // StrictMode 双挂载竞态：若清理已先执行，立即解绑刚注册的监听器
@@ -290,6 +338,37 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
           <div key={i} className="log-line">{l}</div>
         ))}
       </div>
+
+      {history.length > 0 && (
+        <div className="check-history">
+          <div className="check-history-head">
+            <span>历史记录（最近 {history.length} 次）</span>
+            <button
+              className="btn-secondary"
+              onClick={() => {
+                localStorage.removeItem(HISTORY_KEY);
+                setHistory([]);
+              }}
+              title="清空历史记录"
+            >
+              清空
+            </button>
+          </div>
+          {history.map((h, i) => (
+            <div key={i} className="history-line">
+              <span className="history-time">{h.time}</span>
+              <span>通过 {h.pass}</span>
+              <span>WA {h.wa}</span>
+              <span>TLE {h.tle}</span>
+              <span>MLE {h.mle}</span>
+              <span>RE {h.re + h.error}</span>
+              <span className="history-total">共 {h.tested}/{h.total} 组</span>
+              <span className="history-reason">｜ {h.reason}</span>
+              {h.fail_dir && <span className="history-fail">｜ {h.fail_dir}</span>}
+            </div>
+          ))}
+        </div>
+      )}
 
       {preview && (
         <div className="modal-mask" onClick={() => setPreview(null)}>

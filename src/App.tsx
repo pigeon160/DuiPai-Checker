@@ -14,7 +14,7 @@ import {
   type ProgramSpec,
 } from "./api";
 import { registerDslLanguage } from "./dslLanguage";
-import { DSL_TEMPLATES } from "./templates";
+import { DSL_TEMPLATES, type DslTemplate } from "./templates";
 import DslEditor from "./components/DslEditor";
 import VariableList from "./components/VariableList";
 import GeneratePanel from "./components/GeneratePanel";
@@ -24,13 +24,8 @@ import { Panel, SplitHandle } from "./components/Panel";
 
 const COLLAPSED_KEY = "duipai_collapsed";
 const HEIGHTS_KEY = "duipai_heights";
-const SAVES_KEY = "duipai_dsl_saves";
+const CUSTOM_TPL_KEY = "duipai_custom_templates";
 const PANEL_COUNT = 5;
-
-interface DslSave {
-  name: string;
-  dsl: string;
-}
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -64,22 +59,33 @@ export default function App() {
   dslRef.current = dsl;
 
   // ---- 模板库与配置管理 ----
-  const [saves, setSaves] = useState<DslSave[]>(() => loadJson(SAVES_KEY, [] as DslSave[]));
-  const [templateIdx, setTemplateIdx] = useState(0);
+  const [customTpls, setCustomTpls] = useState<DslTemplate[]>(() =>
+    loadJson(CUSTOM_TPL_KEY, [] as DslTemplate[]),
+  );
+  const [tplSelect, setTplSelect] = useState("i:0");
   const [saveName, setSaveName] = useState("");
   const [saveErr, setSaveErr] = useState("");
   useEffect(() => {
-    localStorage.setItem(SAVES_KEY, JSON.stringify(saves));
-  }, [saves]);
+    localStorage.setItem(CUSTOM_TPL_KEY, JSON.stringify(customTpls));
+  }, [customTpls]);
 
+  /** 载入下拉选中的模板（内置 i:<idx> 或我的模板 c:<name>）。 */
   const loadTemplate = () => {
-    setDsl(DSL_TEMPLATES[templateIdx]?.dsl ?? "");
+    if (tplSelect.startsWith("i:")) {
+      const idx = Number(tplSelect.slice(2));
+      setDsl(DSL_TEMPLATES[idx]?.dsl ?? "");
+    } else if (tplSelect.startsWith("c:")) {
+      const name = tplSelect.slice(2);
+      const t = customTpls.find((x) => x.name === name);
+      if (t) setDsl(t.dsl);
+    }
     setEditorFocused(false);
   };
 
-  const saveCurrent = () => {
-    const name = saveName.trim() || `保存 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
-    setSaves((s) => {
+  /** 当前 DSL 另存为我的模板（同名覆盖）。 */
+  const saveAsTemplate = () => {
+    const name = saveName.trim() || `模板 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
+    setCustomTpls((s) => {
       const next = s.filter((x) => x.name !== name);
       next.push({ name, dsl: dslRef.current });
       return next;
@@ -88,15 +94,10 @@ export default function App() {
     setSaveErr("");
   };
 
-  const loadSave = (name: string) => {
-    const s = saves.find((x) => x.name === name);
-    if (s) {
-      setDsl(s.dsl);
-      setEditorFocused(false);
-    }
+  const deleteTemplate = (name: string) => {
+    setCustomTpls((s) => s.filter((x) => x.name !== name));
+    setTplSelect("i:0");
   };
-
-  const deleteSave = (name: string) => setSaves((s) => s.filter((x) => x.name !== name));
 
   const exportDsl = async () => {
     const path = await save({
@@ -276,60 +277,56 @@ export default function App() {
             <>
               <select
                 className="toolbar-select"
-                value={templateIdx}
-                onChange={(e) => setTemplateIdx(Number(e.target.value))}
-                title="常用题型模板"
+                value={tplSelect}
+                onChange={(e) => setTplSelect(e.target.value)}
+                title="常用题型模板（含我的模板）"
               >
-                {DSL_TEMPLATES.map((t, i) => (
-                  <option key={t.name} value={i}>
-                    {t.name}
-                  </option>
-                ))}
+                <optgroup label="内置模板">
+                  {DSL_TEMPLATES.map((t, i) => (
+                    <option key={t.name} value={`i:${i}`}>
+                      {t.name}
+                    </option>
+                  ))}
+                </optgroup>
+                {customTpls.length > 0 && (
+                  <optgroup label="我的模板">
+                    {customTpls.map((t) => (
+                      <option key={t.name} value={`c:${t.name}`}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
-              <button onClick={loadTemplate} title="载入选中的题型模板">
+              <button onClick={loadTemplate} title="载入选中的模板">
                 载入模板
               </button>
               <input
                 className="save-name-input"
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                placeholder="保存为…"
-                title="给当前 DSL 起名保存（本机）"
+                placeholder="另存为…"
+                title="把当前 DSL 另存为我的模板（本机，同名覆盖）"
               />
-              <button onClick={saveCurrent}>保存</button>
-              {saves.length > 0 && (
-                <>
-                  <select
-                    className="toolbar-select"
-                    value=""
-                    onChange={(e) => {
-                      if (e.target.value) loadSave(e.target.value);
-                    }}
-                    title="载入已保存的 DSL"
-                  >
-                    <option value="">已保存…</option>
-                    {saves.map((s) => (
-                      <option key={s.name} value={s.name}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="toolbar-select"
-                    value=""
-                    onChange={(e) => {
-                      if (e.target.value) deleteSave(e.target.value);
-                    }}
-                    title="删除已保存的 DSL"
-                  >
-                    <option value="">删除…</option>
-                    {saves.map((s) => (
-                      <option key={s.name} value={s.name}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </>
+              <button onClick={saveAsTemplate} title="把当前 DSL 存为模板">
+                另存为模板
+              </button>
+              {customTpls.length > 0 && (
+                <select
+                  className="toolbar-select"
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) deleteTemplate(e.target.value);
+                  }}
+                  title="删除我的模板"
+                >
+                  <option value="">删除模板…</option>
+                  {customTpls.map((s) => (
+                    <option key={s.name} value={s.name}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
               )}
               <button onClick={importDsl} title="从 .dsl 文件导入">
                 导入
