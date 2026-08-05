@@ -1,6 +1,6 @@
 [package]
 name = "duipai-checker"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 description = "对拍检查器（Tauri 壳层，仅暴露 IPC，逻辑在 duipai-core）"
 

@@ -1,6 +1,6 @@
 [package]
 name = "duipai-core"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 description = "对拍 DSL 核心库：解析、序列化、表达式求值（纯逻辑，无 UI 依赖）"
 
