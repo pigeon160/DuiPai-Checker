@@ -89,15 +89,15 @@ function RepeatRow({
 
   return (
     <div className="var-row repeat-row">
-      <span className="move-btns">
-        <button className="move-btn" disabled={index === 0} onClick={() => onMove(index, -1)} title="上移">
-          ↑
-        </button>
-        <button className="move-btn" disabled={index === total - 1} onClick={() => onMove(index, 1)} title="下移">
-          ↓
-        </button>
-      </span>
       <div className="line-head">
+        <span className="move-btns">
+          <button className="move-btn" disabled={index === 0} onClick={() => onMove(index, -1)} title="上移">
+            ↑
+          </button>
+          <button className="move-btn" disabled={index === total - 1} onClick={() => onMove(index, 1)} title="下移">
+            ↓
+          </button>
+        </span>
         <span className="kind-badge" style={{ background: "#FEF3C7", color: "#B45309" }}>
           repeat
         </span>
