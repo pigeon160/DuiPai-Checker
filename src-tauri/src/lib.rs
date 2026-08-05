@@ -14,6 +14,7 @@ pub fn run() {
             commands::generate_data,
             commands::save_text_file,
             commands::read_text_file,
+            commands::open_dir,
             commands::compile_program,
             commands::run_program_ipc,
             commands::duipai_start,

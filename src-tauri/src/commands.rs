@@ -103,6 +103,28 @@ pub fn read_text_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// 用资源管理器打开目录（对拍失败现场一键查看）。
+#[tauri::command]
+pub fn open_dir(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("目录不存在：{path}"));
+    }
+    if !p.is_dir() {
+        return Err(format!("不是目录：{path}"));
+    }
+    let mut cmd = std::process::Command::new("explorer");
+    cmd.arg(&path);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("打开目录失败：{e}"))
+}
+
 /// 编译 C++ 源码。
 #[tauri::command]
 pub fn compile_program(

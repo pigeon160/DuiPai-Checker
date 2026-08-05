@@ -128,6 +128,11 @@ export function readTextFile(path: string): Promise<string> {
   return invoke<string>("read_text_file", { path });
 }
 
+/** 用资源管理器打开目录（对拍失败现场）。 */
+export function openDir(path: string): Promise<void> {
+  return invoke<void>("open_dir", { path });
+}
+
 /** 编译 C++ 源码。 */
 export function compileProgram(
   source: string,

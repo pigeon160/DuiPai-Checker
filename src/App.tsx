@@ -353,7 +353,19 @@ export default function App() {
           {errors.length > 0 && (
             <ul className="err-list">
               {errors.map((e, i) => (
-                <li key={i}>
+                <li
+                  key={i}
+                  className={e.line != null ? "err-jump" : undefined}
+                  title={e.line != null ? "点击跳转到该行" : undefined}
+                  onClick={() => {
+                    if (e.line == null) return;
+                    const ed = editorRef.current;
+                    if (!ed) return;
+                    ed.revealPositionInCenter({ lineNumber: e.line, column: 1 });
+                    ed.setPosition({ lineNumber: e.line, column: 1 });
+                    ed.focus();
+                  }}
+                >
                   {e.line != null && <b>第 {e.line} 行：</b>}
                   {e.message}
                 </li>

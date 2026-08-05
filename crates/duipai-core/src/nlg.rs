@@ -154,10 +154,30 @@ fn cn_num(s: &str) -> Option<&'static str> {
     })
 }
 
-/// 数字 / 中文数字 -> 数字字符串。
+/// 英文数字词（one~ten）→ 数字字符串。
+fn en_num(s: &str) -> Option<&'static str> {
+    Some(match s {
+        "one" => "1",
+        "two" => "2",
+        "three" => "3",
+        "four" => "4",
+        "five" => "5",
+        "six" => "6",
+        "seven" => "7",
+        "eight" => "8",
+        "nine" => "9",
+        "ten" => "10",
+        _ => return None,
+    })
+}
+
+/// 数字 / 中文数字 / 英文数字词 -> 数字字符串。
 fn num_str(s: &str) -> Option<String> {
     let s = s.trim();
     if let Some(v) = cn_num(s) {
+        return Some(v.to_string());
+    }
+    if let Some(v) = en_num(s) {
         return Some(v.to_string());
     }
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_digit() || c == '.') && s.chars().next().map_or(false, |c| c.is_ascii_digit()) {
@@ -639,14 +659,46 @@ fn rule_convert(text: &str) -> Option<Parsed> {
     // ---- 1) 行片段 / 数组（先处理：显式变量（如第一行的 n）先定义，供主题引用）----
     for (frag, ctx) in segment_lines(text) {
         match ctx {
-            Some(LineCtx::Single) | Some(LineCtx::Rows) => {
+            Some(LineCtx::Single) => {
                 p.hit = true;
-                let rows = match ctx.unwrap() {
-                    LineCtx::Single => "1".to_string(),
-                    LineCtx::Rows => detect_rows_expr(&frag).unwrap_or_else(|| "n".to_string()),
-                };
+                let items = items_from_clause(&frag, &mut p, &ranges, bare.as_ref());
+                p.blocks.push(Block::Line { rows: "1".to_string(), items });
+            }
+            Some(LineCtx::Rows) => {
+                p.hit = true;
+                let rows = detect_rows_expr(&frag).unwrap_or_else(|| "n".to_string());
                 if rows != "1" && is_name_str(&rows) {
                     p.name_used(&rows);
+                }
+                // 「每行 N 个类型」（N ≠ 1 且片段内单一类型词）→ 矩阵：
+                // 「接下来 n 行每行 m 个整数」= n 行 m 列 → M = matrix(n, m, …)
+                let per_row = detect_count(&frag);
+                let single_type = count_type_words(&frag) <= 1;
+                if let Some(count) = per_row {
+                    if count != "1" && single_type {
+                        let count_expr = if is_name_str(&count) && !p.used.contains(&count) {
+                            p.name_used(&count);
+                            let (lo, hi, def) = resolve(&count, &ranges, None);
+                            if def {
+                                p.defaults = true;
+                                p.warnings.push(format!("未识别 {count} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
+                            }
+                            p.implicit.push(NumItem { elem: Elem::Int, name: count.clone(), lo, hi, prec: None });
+                            count
+                        } else {
+                            count
+                        };
+                        let (elem, _) = detect_elem(&frag).unwrap_or((Elem::Int, Vec::new()));
+                        let (lo, hi, def) = resolve("a", &ranges, bare.as_ref());
+                        if def {
+                            p.defaults = true;
+                            p.warnings.push("未识别矩阵元素范围，默认 1~100".into());
+                        }
+                        p.blocks.push(Block::Cmd(format!(
+                            "M = matrix({rows}, {count_expr}, {lo}, {hi})",
+                        )));
+                        continue;
+                    }
                 }
                 let items = items_from_clause(&frag, &mut p, &ranges, bare.as_ref());
                 p.blocks.push(Block::Line { rows, items });
@@ -974,6 +1026,21 @@ fn items_from_clause(
     items
 }
 
+/// 统计片段中的类型词个数（辅助「每行 N 个类型 → 矩阵」判定）。
+fn count_type_words(s: &str) -> usize {
+    let mut n = 0;
+    let mut rest = s;
+    while let Some((start, len)) = detect_elem_pos(rest) {
+        n += 1;
+        let next = start + len;
+        rest = if next < rest.len() { &rest[next..] } else { "" };
+        if n > 1 {
+            break;
+        }
+    }
+    n
+}
+
 /// 找到第一个类型词的位置与长度（辅助多类型词扫描）。
 fn detect_elem_pos(s: &str) -> Option<(usize, usize)> {
     static RX: OnceLock<Regex> = OnceLock::new();
@@ -1208,6 +1275,23 @@ mod tests {
             format!("warn={:?}\n{}", r.warnings, r.dsl),
         );
         assert!(r.dsl.contains("str s: int(1, 100)"), "{}", r.dsl);
+        assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
+    }
+
+    #[test]
+    fn nested_group_matrix() {
+        // 每组内：第一行 n m + 接下来 n 行每行 m 个整数 → 块内矩阵
+        let r = conv("T 组数据，每组：第一行 n m，接下来 n 行每行 m 个整数");
+        assert!(r.dsl.contains("repeat (t):"), "{}", r.dsl);
+        assert!(r.dsl.contains("M = matrix(n, m, 1, 100)"), "{}", r.dsl);
+        assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
+    }
+
+    #[test]
+    fn per_row_two_ints_matrix() {
+        // 非多测：接下来 n 行每行两个整数 → matrix(n, 2)
+        let r = conv("第一行一个整数 n (1<=n<=100)，接下来 n 行每行两个整数");
+        assert!(r.dsl.contains("M = matrix(n, 2, 1, 100)"), "{}", r.dsl);
         assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
     }
 

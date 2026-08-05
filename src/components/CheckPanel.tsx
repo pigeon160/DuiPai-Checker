@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   duipaiCancel,
   duipaiStart,
+  openDir,
   readTextFile,
   type CheckEvent,
   type CheckParams,
@@ -119,6 +120,8 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
   const [error, setError] = useState<string>("");
   const [preview, setPreview] = useState<{ path: string; content: string } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+  const [lastFailDir, setLastFailDir] = useState<string | null>(null);
+  const [openDirErr, setOpenDirErr] = useState("");
   const logBoxRef = useRef<HTMLDivElement>(null);
   const totalRef = useRef(100);
   totalRef.current = total.trim() === "" ? 100 : Number(total.trim()) || 100;
@@ -152,6 +155,8 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
           `  通过：${e.stats.pass}    不一致(WA)：${e.stats.wa}    超时(TLE)：${e.stats.tle}    内存超限(MLE)：${e.stats.mle}    运行错误(RE/Error)：${errs}`,
           ...(e.fail_dir ? [`现场已保存：${e.fail_dir}`] : []),
         ]);
+        setLastFailDir(e.fail_dir);
+        setOpenDirErr("");
         // 历史记录（localStorage，上限 20 条滚动淘汰）
         const entry: HistoryEntry = {
           time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
@@ -332,6 +337,23 @@ export default function CheckPanel({ config, genMode, ext, onGenMode, onExt }: P
           {total !== "-1" && `/${total}`} ｜ 通过 {stats.pass} ｜ WA {stats.wa} ｜ TLE {stats.tle} ｜ MLE {stats.mle} ｜ RE {stats.re} ｜ 错误 {stats.error}
         </span>
         {error && <span className="param-error">{error}</span>}
+        {lastFailDir && (
+          <button
+            className="btn-secondary"
+            onClick={async () => {
+              try {
+                await openDir(lastFailDir);
+                setOpenDirErr("");
+              } catch (e) {
+                setOpenDirErr(String(e));
+              }
+            }}
+            title={`打开失败现场：${lastFailDir}`}
+          >
+            打开现场（fail）
+          </button>
+        )}
+        {openDirErr && <span className="param-error">{openDirErr}</span>}
       </div>
       <div className="log-box" ref={logBoxRef}>
         {logs.map((l, i) => (
