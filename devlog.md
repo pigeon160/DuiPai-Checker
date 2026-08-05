@@ -543,3 +543,9 @@
 - DSL 编辑器工具栏：载入模板 / 保存（localStorage 多份）/ 载入已保存 / 删除 / 导入 .dsl 文件 / 导出
 
 测试 138 全绿（nlg 33）。
+## v1.0.1 树新增 parent 类型（父节点序列，1 为根）（2026-08-05）
+
+- tree(type="parent")：以 1 为根，输出 n-1 行，第 i 行 = 节点 i+1 的父节点（随机 1..=i）；可带权（父节点 + 权值）
+- parser/serializer/generator/validate/nlg/model prompt 全链路支持
+- 前端：图形化树类型下拉加「父节点序列（1 为根）」+ 添加预设
+- 测试 140 全绿（parent 生成形态/带权/roundtrip/nlg）

@@ -46,6 +46,8 @@ pub enum TreeType {
     Star,
     /// 链（chain）：随机排列顶点连成链
     Chain,
+    /// 父节点序列（parent）：以 1 为根，输出 n-1 行（第 i 行 = 节点 i+1 的父节点）
+    Parent,
 }
 
 /// 图结构类型。

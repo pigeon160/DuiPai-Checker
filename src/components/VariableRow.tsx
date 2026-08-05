@@ -609,6 +609,7 @@ function KindForm({
           <option value="Random">随机树</option>
           <option value="Star">菊花图</option>
           <option value="Chain">链</option>
+          <option value="Parent">父节点序列（1 为根）</option>
         </select>
         <TextFields kind={kind} onKind={onKind} />
         <WeightGroup label="边权" w={v.w} onChange={(w) => onKind(setWeight(kind, w))} />

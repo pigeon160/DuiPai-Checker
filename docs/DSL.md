@@ -76,6 +76,7 @@ line:
 | `tree` | `t = tree(n, int(1,10))` | n-1 条边（**无规模行**） |
 | `tree` | `t = tree(n, type="star")` | 菊花图（中心连所有点） |
 | `tree` | `t = tree(n, type="chain")` | 链（随机排列顶点连成链） |
+| `tree` | `t = tree(n, type="parent")` | 以 1 为根：输出 n-1 行，第 i 行 = 节点 i+1 的父节点（可带权） |
 | `graph` | `g = graph(n, m, 1, 0, int(1,10))` | m 条边（**无规模行**） |
 | `graph` | `g = graph(n, m, 1, 0, type="dag")` | 有向无环图（u < v） |
 | `graph` | `g = graph(n, m, 0, 0, type="bipartite")` | 二分图 |

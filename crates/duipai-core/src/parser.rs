@@ -295,6 +295,7 @@ fn parse_cmd(cmd: &str, args: &[Tok]) -> DslResult<VarKind> {
             let ttype = match kw_expr("type").as_deref() {
                 Some("star") => crate::ast::TreeType::Star,
                 Some("chain") => crate::ast::TreeType::Chain,
+                Some("parent") => crate::ast::TreeType::Parent,
                 Some(t) => return Err(DslError::bare(format!("未知树类型：{t}"))),
                 _ => crate::ast::TreeType::Random,
             };

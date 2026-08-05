@@ -68,6 +68,7 @@ export const KIND_ORDER: { kind: VarKind; label: string }[] = [
   { kind: { Tree: { n: "10", ttype: "Random", w: null } }, label: "树" },
   { kind: { Tree: { n: "10", ttype: "Star", w: null } }, label: "树（菊花图）" },
   { kind: { Tree: { n: "10", ttype: "Chain", w: null } }, label: "树（链）" },
+  { kind: { Tree: { n: "10", ttype: "Parent", w: null } }, label: "树（父节点序列）" },
   { kind: { Graph: { gtype: "General", n: "10", m: "15", directed: true, connected: false, multi: false, loop_: false, k: null, w: null } }, label: "图" },
   { kind: { Graph: { gtype: "Dag", n: "10", m: "15", directed: true, connected: false, multi: false, loop_: false, k: null, w: null } }, label: "图（DAG）" },
   { kind: { Graph: { gtype: "Bipartite", n: "10", m: "15", directed: false, connected: false, multi: false, loop_: false, k: null, w: null } }, label: "图（二分）" },
@@ -109,6 +110,7 @@ export function kindLabel(kind: VarKind): string {
       switch (t.ttype) {
         case "Star": return "树（菊花图）";
         case "Chain": return "树（链）";
+        case "Parent": return "树（父节点序列）";
         default: return "树";
       }
     }

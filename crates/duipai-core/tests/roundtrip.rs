@@ -851,10 +851,10 @@ fn kw_prec_retired() {
 
 #[test]
 fn tree_type_roundtrip() {
-    let text = "t = tree(5, type=\"star\", int(1, 9))\nc = tree(6, type=\"chain\")\n";
+    let text = "t = tree(5, type=\"star\", int(1, 9))\nc = tree(6, type=\"chain\")\np = tree(7, type=\"parent\")\n";
     let cfg = parse(text).expect("parse");
     let out = serialize(&cfg).expect("serialize");
-    assert_eq!(out, "t = tree(5, type=\"star\", int(1, 9))\nc = tree(6, type=\"chain\")");
+    assert_eq!(out, "t = tree(5, type=\"star\", int(1, 9))\nc = tree(6, type=\"chain\")\np = tree(7, type=\"parent\")");
     let cfg2 = parse(&out).expect("re-parse");
     assert_eq!(cfg, cfg2);
 }

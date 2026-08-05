@@ -431,6 +431,37 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                         edges.push((u, v));
                     }
                 }
+                crate::ast::TreeType::Parent => {
+                    // 以 1 为根：输出 n-1 行，第 i 行 = 节点 i+1 的父节点（随机 1..=i）
+                    for i in 2..=n {
+                        let p = ctx.int(1, i - 1);
+                        match w.as_ref() {
+                            None => lines.push(p.to_string()),
+                            Some(w) if w.kind == ElemType::Int => {
+                                let lo = ctx.ev(&w.min, "边权范围")? as i64;
+                                let hi = ctx.ev(&w.max, "边权范围")? as i64;
+                                if lo > hi {
+                                    return Err(DslError::bare("边权范围最小值不能大于最大值"));
+                                }
+                                lines.push(format!("{p} {}", ctx.int(lo, hi)));
+                            }
+                            Some(w) => {
+                                let lo = ctx.ev(&w.min, "边权范围")?;
+                                let hi = ctx.ev(&w.max, "边权范围")?;
+                                if lo > hi {
+                                    return Err(DslError::bare("边权范围最小值不能大于最大值"));
+                                }
+                                let prec = ctx.ev(&w.prec, "边权精度")? as i64;
+                                if !(0..=15).contains(&prec) {
+                                    return Err(DslError::bare("边权精度应在 0~15 之间"));
+                                }
+                                lines.push(format!("{p} {}", format_float(ctx.uniform(lo, hi), prec)));
+                            }
+                        }
+                    }
+                    ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
+                    return Ok(());
+                }
             }
             ctx.shuffle(&mut edges);
             for (u, v) in edges {

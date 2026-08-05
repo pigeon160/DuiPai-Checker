@@ -703,6 +703,8 @@ fn rule_convert(text: &str) -> Option<Parsed> {
                 "type=\"star\""
             } else if clause.contains("链") {
                 "type=\"chain\""
+            } else if clause.contains("父节点") || clause.contains("父亲") || clause.contains("parent") {
+                "type=\"parent\""
             } else {
                 ""
             };
@@ -1262,6 +1264,12 @@ mod tests {
     fn tree_with_weight() {
         let r = conv("一棵 n 个点的树，边权 1 到 100");
         assert!(r.dsl.contains("t = tree(n, int(1, 100))"), "{}", r.dsl);
+    }
+
+    #[test]
+    fn tree_parent() {
+        let r = conv("以 1 为根的树，n 个节点，输入每个节点的父节点");
+        assert!(r.dsl.contains("t = tree(n, type=\"parent\")"), "{}", r.dsl);
     }
 
     #[test]

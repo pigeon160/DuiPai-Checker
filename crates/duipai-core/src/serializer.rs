@@ -124,6 +124,7 @@ pub fn lines_for(item: &Item) -> DslResult<Vec<String>> {
                 let t = match ttype {
                     crate::ast::TreeType::Star => "star",
                     crate::ast::TreeType::Chain => "chain",
+                    crate::ast::TreeType::Parent => "parent",
                     crate::ast::TreeType::Random => unreachable!(),
                 };
                 parts.push(format!("type=\"{t}\""));

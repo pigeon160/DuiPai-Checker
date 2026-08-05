@@ -86,6 +86,7 @@ pub fn build_prompt(text: &str, last_error: Option<&str>) -> String {
          - repeat 块：`repeat (T):` + 缩进所有语句，整体重复 T 次，变量每轮覆盖\n\
          - 顶层命令：`a = ints(n, 1, 100)`、`M = matrix(n, m, 0, 1)`、`p = perm(n)`、\n\
            `iv = intervals(n, 1, 100)`、`pt = points(n, 1, 10, 1, 10)`、`t = tree(n, int(1, 9))`、\n\
+           `t = tree(n, type=\"parent\")`（1 为根，输出 n-1 行父节点）\n\
            `g = graph(n, m, 0, 0, int(1, 9))`（0/1 有向/连通，multi=1/loop=1/type=\"dag\"/\"bipartite\"）\n\
          - 树/图只输出边，无规模行；只能引用前面定义的名字\n\n\
          示例：\n\

@@ -47,7 +47,7 @@ export type VarKind =
         yhi: string;
       };
     }
-  | { Tree: { n: string; ttype: "Random" | "Star" | "Chain"; w: Weight | null } }
+  | { Tree: { n: string; ttype: "Random" | "Star" | "Chain" | "Parent"; w: Weight | null } }
   | {
       Graph: {
         gtype: "General" | "Dag" | "Bipartite" | "Ring" | "BaseRing";
