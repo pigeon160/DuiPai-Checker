@@ -5,6 +5,8 @@ edition = "2021"
 description = "对拍 DSL 核心库：解析、序列化、表达式求值（纯逻辑，无 UI 依赖）"
 
 [dependencies]
+encoding_rs = "0.8"
+llama-cpp-2 = { version = "0.1", optional = true }
 rand = "0.9"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -13,8 +15,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [features]
-# 本地大模型通道（llama-cpp-2 依赖在模型文件到位后启用）
-nl-model = []
+# 本地大模型通道（llama-cpp-2：首次编译约 5-15 分钟，默认关闭）
+nl-model = ["dep:llama-cpp-2"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", features = ["Win32_System_ProcessStatus"] }

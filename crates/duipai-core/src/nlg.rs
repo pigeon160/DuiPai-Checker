@@ -1249,8 +1249,8 @@ pub fn rule_to_dsl(text: &str) -> Option<NlResult> {
 
 /// 完整管道：规则优先 → 模型后备 → 校验。
 ///
-/// 模型通道在 `nl-model` feature 开启时接入；当前未启用时未命中直接返回
-/// 低置信失败结果。
+/// 规则命中（置信度 > 0）直接返回；未命中且模型通道就绪时走本地大模型
+/// 推理（parse + validate 校验重试 ≤2 次）；模型不可用时返回低置信失败结果。
 pub fn nl_to_dsl(text: &str) -> NlResult {
     let text = text.trim();
     if text.is_empty() {
@@ -1261,17 +1261,52 @@ pub fn nl_to_dsl(text: &str) -> NlResult {
             warnings: vec!["输入为空".to_string()],
         };
     }
-    match rule_to_dsl(text) {
-        Some(r) => r,
-        None => NlResult {
-            dsl: String::new(),
-            confidence: 0.0,
-            method: NlMethod::Rule,
-            warnings: vec![
-                "未识别输入格式：请用类似「第一行两个整数 n m，接下来 n 行每行两个整数」的描述".to_string(),
-                "模型通道规划中，当前仅支持规则匹配".to_string(),
-            ],
-        },
+    if let Some(r) = rule_to_dsl(text) {
+        if r.confidence > 0.0 {
+            return r;
+        }
+    }
+    #[cfg(feature = "nl-model")]
+    if crate::model::model_loaded() {
+        let req = crate::model::ModelInferRequest {
+            text: text.to_string(),
+            last_error: None,
+        };
+        match crate::model::infer(&req) {
+            Ok(r) if !r.dsl.is_empty() => {
+                return NlResult {
+                    dsl: r.dsl,
+                    confidence: r.confidence,
+                    method: NlMethod::Model,
+                    warnings: Vec::new(),
+                };
+            }
+            Ok(_) => {
+                return NlResult {
+                    dsl: String::new(),
+                    confidence: 0.0,
+                    method: NlMethod::Model,
+                    warnings: vec!["模型推理输出为空".to_string()],
+                };
+            }
+            Err(e) => {
+                return NlResult {
+                    dsl: String::new(),
+                    confidence: 0.0,
+                    method: NlMethod::Model,
+                    warnings: vec![format!("模型推理失败：{e}")],
+                };
+            }
+        }
+    }
+    NlResult {
+        dsl: String::new(),
+        confidence: 0.0,
+        method: NlMethod::Rule,
+        warnings: vec![
+            "未识别输入格式：请用类似「第一行两个整数 n m，接下来 n 行每行两个整数」的描述".to_string(),
+            "模型通道未启用或未加载：当前仅规则引擎可用".to_string(),
+        ],
     }
 }
 

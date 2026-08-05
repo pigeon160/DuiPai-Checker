@@ -844,3 +844,9 @@ input.invalid,
 .history-fail { color: var(--accent); }
 .err-jump { cursor: pointer; }
 .err-jump:hover { text-decoration: underline; }
+.dl-progress {
+  margin-top: 6px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden;
+}
+.dl-progress-bar {
+  height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.2s;
+}

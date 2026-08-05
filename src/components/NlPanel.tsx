@@ -24,7 +24,9 @@ export default function NlPanel({ onLoadDsl }: Props) {
   const [modelPathInput, setModelPathInput] = useState("");
   const [modelMsg, setModelMsg] = useState("");
   const [dlBusy, setDlBusy] = useState(false);
-  const dlStateRef = useRef<"idle" | "start" | "done" | "error">("idle");
+  const [dlPct, setDlPct] = useState<number | null>(null);
+  const [loadingModel, setLoadingModel] = useState(false);
+  const dlStateRef = useRef<"idle" | "start" | "progress" | "done" | "error">("idle");
 
   const refreshModel = async () => {
     try {
@@ -41,6 +43,11 @@ export default function NlPanel({ onLoadDsl }: Props) {
     const un = listen<ModelProgress>("model://progress", (e) => {
       const p = e.payload;
       dlStateRef.current = p.stage;
+      if (p.stage === "progress") {
+        setDlPct(p.pct ?? null);
+        setModelMsg(`下载中 ${p.pct ?? "…"}%`);
+        return;
+      }
       setModelMsg(
         p.stage === "start"
           ? `正在下载 ${p.file}…（完成后再设置路径）`
@@ -48,7 +55,11 @@ export default function NlPanel({ onLoadDsl }: Props) {
             ? `下载完成：${p.file}`
             : `下载失败：${p.message}`,
       );
-      if (p.stage === "done" || p.stage === "error") setDlBusy(false);
+      if (p.stage === "done" || p.stage === "error") {
+        setDlBusy(false);
+        setDlPct(p.stage === "done" ? 100 : null);
+        refreshModel();
+      }
     });
     return () => {
       un.then((f) => f());
@@ -81,12 +92,15 @@ export default function NlPanel({ onLoadDsl }: Props) {
 
   const onLoad = async () => {
     setModelMsg("");
+    setLoadingModel(true);
     try {
       const s = await modelLoad();
       setModel(s);
-      setModelMsg("模型加载成功");
+      setModelMsg(s.loaded ? "模型加载成功" : "模型未加载");
     } catch (e) {
       setModelMsg(String(e));
+    } finally {
+      setLoadingModel(false);
     }
   };
 
@@ -190,17 +204,22 @@ export default function NlPanel({ onLoadDsl }: Props) {
           <button className="btn-secondary" onClick={onSetPath} disabled={dlBusy}>
             设置路径
           </button>
-          <button className="btn-secondary" onClick={onLoad} disabled={!model?.available || dlBusy}>
-            加载
+          <button className="btn-secondary" onClick={onLoad} disabled={!model?.available || dlBusy || loadingModel}>
+            {loadingModel ? "加载中…" : "加载"}
           </button>
-          <button className="btn-secondary" onClick={onDownload} disabled={dlBusy}>
+          <button className="btn-secondary" onClick={onDownload} disabled={dlBusy || loadingModel}>
             {dlBusy ? "下载中…" : "下载模型"}
           </button>
         </div>
+        {dlBusy && dlPct != null && (
+          <div className="dl-progress">
+            <div className="dl-progress-bar" style={{ width: `${dlPct}%` }} />
+          </div>
+        )}
         {modelMsg && <div className="stale-hint nl-model-msg">{modelMsg}</div>}
         <p className="nl-model-hint">
-          模型推理通道（llama.cpp）规划中：放置 GGUF 模型文件后可加载。
-          未配置时转换由规则引擎完成，覆盖常见题型描述。
+          模型推理通道（llama.cpp，nl-model 编译特性）：放置 GGUF 模型文件后可加载，
+          规则未命中的描述由模型转换。未启用时仅规则引擎工作。
         </p>
       </div>
     </div>

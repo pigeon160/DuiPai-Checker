@@ -115,13 +115,12 @@ pub fn build_prompt(text: &str, last_error: Option<&str>) -> String {
 /// 模型推理入口。
 ///
 /// `nl-model` 未启用时返回 Err（由调用方降级到规则结果）。
+/// 启用时：few-shot prompt → 生成 → 提取 DSL → parse + validate 校验 →
+/// 失败用错误信息重试 ≤2 次 → 返回 DSL + 置信度（首次 0.85，每次重试 -0.1）。
 pub fn infer(req: &ModelInferRequest) -> Result<ModelInferResult, String> {
     #[cfg(feature = "nl-model")]
     {
-        // TODO(nl-model)：加载 GGUF（llama-cpp-2），执行 build_prompt 推理，
-        // 解析输出 -> parse + validate，失败重试 <=2 次。
-        let _ = req;
-        Err("模型通道尚未接入推理实现（nl-model 编译特性已启用，但推理代码待补）".to_string())
+        llm::infer(req)
     }
     #[cfg(not(feature = "nl-model"))]
     {
@@ -130,9 +129,206 @@ pub fn infer(req: &ModelInferRequest) -> Result<ModelInferResult, String> {
     }
 }
 
+/// 模型是否已加载（供管道判断是否走模型通道）。
+pub fn model_loaded() -> bool {
+    #[cfg(feature = "nl-model")]
+    {
+        llm::is_loaded()
+    }
+    #[cfg(not(feature = "nl-model"))]
+    {
+        false
+    }
+}
+
+/// 加载模型（feature 未启用时报错）。
+pub fn model_load(path: &str) -> Result<(), String> {
+    #[cfg(feature = "nl-model")]
+    {
+        llm::load(path)
+    }
+    #[cfg(not(feature = "nl-model"))]
+    {
+        let _ = path;
+        Err("模型通道未编译启用（nl-model 特性）：需要启用该特性重新编译".to_string())
+    }
+}
+
+/// 卸载模型（feature 未启用时无操作）。
+pub fn model_unload() {
+    #[cfg(feature = "nl-model")]
+    llm::unload();
+    #[cfg(not(feature = "nl-model"))]
+    {}
+}
+
 /// 校验模型路径是否存在（供加载前检查）。
 pub fn check_model_path(path: &str) -> bool {
     std::path::Path::new(path).is_file()
+}
+
+// --------------------------------------------------------------------------- //
+// llama.cpp 实现（nl-model feature 门控）
+// --------------------------------------------------------------------------- //
+
+#[cfg(feature = "nl-model")]
+mod llm {
+    use std::sync::Mutex;
+
+    use llama_cpp_2::context::params::LlamaContextParams;
+    use llama_cpp_2::llama_backend::LlamaBackend;
+    use llama_cpp_2::llama_batch::LlamaBatch;
+    use llama_cpp_2::model::{AddBos, LlamaModel};
+    use llama_cpp_2::sampling::LlamaSampler;
+
+    use crate::model::{build_prompt, ModelInferRequest, ModelInferResult};
+
+    struct Inner {
+        backend: LlamaBackend,
+        model: LlamaModel,
+        path: String,
+        busy: bool,
+    }
+
+    static MANAGER: Mutex<Option<Inner>> = Mutex::new(None);
+
+    pub fn is_loaded() -> bool {
+        MANAGER.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    pub fn load(path: &str) -> Result<(), String> {
+        {
+            let mut g = MANAGER.lock().map_err(|_| "模型管理器锁损坏".to_string())?;
+            if let Some(inner) = g.as_ref() {
+                if inner.path == path {
+                    return Ok(());
+                }
+            }
+            *g = None;
+        }
+        let backend = LlamaBackend::init().map_err(|e| format!("初始化推理后端失败：{e}"))?;
+        let model = LlamaModel::load_from_file(&backend, std::path::Path::new(path), &Default::default())
+            .map_err(|e| format!("加载模型失败：{e}"))?;
+        let mut g = MANAGER.lock().map_err(|_| "模型管理器锁损坏".to_string())?;
+        *g = Some(Inner {
+            backend,
+            model,
+            path: path.to_string(),
+            busy: false,
+        });
+        Ok(())
+    }
+
+    pub fn unload() {
+        if let Ok(mut g) = MANAGER.lock() {
+            *g = None;
+        }
+    }
+
+    /// 生成一段文本（prompt → max_tokens 采样 → 文本）。
+    fn generate(inner: &mut Inner, prompt: &str, max_tokens: usize) -> Result<String, String> {
+        let tokens = inner
+            .model
+            .str_to_token(prompt, AddBos::Always)
+            .map_err(|e| format!("tokenize 失败：{e}"))?;
+        let mut context = inner
+            .model
+            .new_context(&inner.backend, LlamaContextParams::default())
+            .map_err(|e| format!("创建推理上下文失败：{e}"))?;
+        let eos = inner.model.token_eos();
+
+        let mut batch = LlamaBatch::new(tokens.len() + 512, 1);
+        for (i, t) in tokens.iter().enumerate() {
+            batch
+                .add(*t, i as i32, &[0], false)
+                .map_err(|e| format!("batch 添加失败：{e}"))?;
+        }
+        let mut generated: Vec<_> = Vec::new();
+        let mut pos = tokens.len() as i32;
+        for _ in 0..max_tokens {
+            context
+                .decode(&mut batch)
+                .map_err(|e| format!("推理失败：{e}"))?;
+            let next = LlamaSampler::greedy().sample(&context, 0);
+            if next == eos {
+                break;
+            }
+            generated.push(next);
+            batch.clear();
+            batch
+                .add(next, pos, &[0], true)
+                .map_err(|e| format!("batch 添加失败：{e}"))?;
+            pos += 1;
+        }
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
+        let mut text = String::new();
+        for t in &generated {
+            let piece = inner
+                .model
+                .token_to_piece(*t, &mut decoder, false, None)
+                .map_err(|e| format!("解码失败：{e}"))?;
+            text.push_str(&piece);
+        }
+        Ok(text)
+    }
+
+    /// 从生成文本提取 DSL：去掉 code fence 与「DSL：」前缀。
+    fn extract_dsl(raw: &str) -> String {
+        let mut s = raw.trim().to_string();
+        // 模型有时会回显「DSL：」行
+        if let Some(idx) = s.find("DSL：") {
+            s = s[idx + 4..].to_string();
+        } else if let Some(idx) = s.find("DSL:") {
+            s = s[idx + 4..].to_string();
+        }
+        let s = s.trim().to_string();
+        if s.starts_with("```") {
+            let body = s.trim_start_matches("```").trim();
+            let body = body
+                .strip_suffix("```")
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| body.to_string());
+            return body.trim().to_string();
+        }
+        s
+    }
+
+    pub fn infer(req: &ModelInferRequest) -> Result<ModelInferResult, String> {
+        let mut guard = MANAGER.lock().map_err(|_| "模型管理器锁损坏".to_string())?;
+        let inner = guard.as_mut().ok_or("模型未加载")?;
+        if inner.busy {
+            return Err("模型正在推理中".to_string());
+        }
+        inner.busy = true;
+        let result = (|| {
+            let mut last_err = req.last_error.clone();
+            for attempt in 0..3usize {
+                let prompt = build_prompt(&req.text, last_err.as_deref());
+                let raw = generate(inner, &prompt, 512)?;
+                let dsl = extract_dsl(&raw);
+                if dsl.is_empty() {
+                    last_err = Some("输出为空".to_string());
+                    continue;
+                }
+                match crate::parser::parse(&dsl) {
+                    Ok(cfg) => {
+                        let errs = crate::validate::validate(&cfg);
+                        if errs.is_empty() {
+                            return Ok(ModelInferResult {
+                                dsl,
+                                confidence: 0.85 - attempt as f64 * 0.1,
+                            });
+                        }
+                        last_err = Some(format!("DSL 语义错误：{}", errs[0].message));
+                    }
+                    Err(e) => last_err = Some(format!("DSL 解析错误：{}", e.message)),
+                }
+            }
+            Err(format!("模型推理重试后仍无法生成合法 DSL：{}", last_err.unwrap_or_default()))
+        })();
+        inner.busy = false;
+        result
+    }
 }
 
 #[cfg(test)]
@@ -183,5 +379,23 @@ mod tests {
         let j = serde_json::to_string(&c).expect("to json");
         let back: ModelConfig = serde_json::from_str(&j).expect("from json");
         assert_eq!(c, back);
+    }
+
+    #[cfg(feature = "nl-model")]
+    #[test]
+    #[ignore = "需要 GGUF 模型文件：设置 DUIPAI_TEST_MODEL 环境变量指向 .gguf 后运行"]
+    fn infer_end_to_end_with_model() {
+        let path = std::env::var("DUIPAI_TEST_MODEL").expect("设置 DUIPAI_TEST_MODEL 指向 .gguf 后运行");
+        model_load(&path).expect("加载模型");
+        assert!(model_loaded());
+        let r = infer(&ModelInferRequest {
+            text: "第一行一个整数 n，接下来 n 行每行一个整数 a".into(),
+            last_error: None,
+        });
+        let r = r.expect("推理成功");
+        assert!(!r.dsl.is_empty(), "输出不应为空");
+        crate::parser::parse(&r.dsl).expect("生成的 DSL 应可解析");
+        model_unload();
+        assert!(!model_loaded());
     }
 }

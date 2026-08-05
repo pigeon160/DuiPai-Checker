@@ -260,8 +260,9 @@ export interface ModelStatus {
 
 /** 下载进度事件（model://progress）。 */
 export interface ModelProgress {
-  stage: "start" | "done" | "error";
+  stage: "start" | "progress" | "done" | "error";
   file: string;
+  pct?: number;
   message: string;
 }
 

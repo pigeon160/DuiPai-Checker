@@ -254,11 +254,7 @@ fn current_status(app: &AppHandle) -> Result<ModelStatus, String> {
     let cfg = load_config(app)?;
     let mut st = ModelStatus::default();
     st.path = cfg.path.clone();
-    st.loaded = cfg
-        .path
-        .as_deref()
-        .map(check_model_path)
-        .unwrap_or(false);
+    st.loaded = duipai_core::model_loaded();
     Ok(st)
 }
 
@@ -294,16 +290,16 @@ pub fn model_load(app: AppHandle) -> Result<ModelStatus, String> {
                 .to_string(),
         );
     }
-    // TODO(nl-model)：llama_cpp 加载 GGUF 并保持句柄。
-    Err("模型加载实现待接入（nl-model 特性已启用，加载代码待补）".to_string())
+    duipai_core::model_load(&path).map_err(|e| e)?;
+    current_status(&app)
 }
 
 const MODEL_EVENT: &str = "model://progress";
 
 /// 下载模型文件（GitHub Releases 等）到 models/ 目录。
 ///
-/// 用系统 curl（Windows 10+ 自带）。阶段事件经 `model://progress` 推送：
-/// `{stage: "start"|"done"|"error", file, message}`。
+/// 用系统 curl（Windows 10+ 自带）。进度经 `model://progress` 推送：
+/// `{stage: "start"|"progress"|"done"|"error", file, pct?, message}`。
 #[tauri::command]
 pub fn model_download(app: AppHandle, url: String) -> Result<String, String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
@@ -320,30 +316,54 @@ pub fn model_download(app: AppHandle, url: String) -> Result<String, String> {
     let dest_str = dest.to_string_lossy().to_string();
     let handler = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let emit = |stage: &str, msg: &str| {
-            let _ = handler.emit(
-                MODEL_EVENT,
-                serde_json::json!({ "stage": stage, "file": name, "message": msg }),
-            );
+        use std::io::{BufRead, BufReader};
+        use std::process::Stdio;
+        let emit = |stage: &str, pct: Option<u64>, msg: &str| {
+            let mut payload = serde_json::json!({ "stage": stage, "file": name, "message": msg });
+            if let Some(p) = pct {
+                payload["pct"] = serde_json::json!(p);
+            }
+            let _ = handler.emit(MODEL_EVENT, payload);
         };
-        emit("start", &format!("开始下载 {name}…"));
+        emit("start", None, &format!("开始下载 {name}…"));
         let mut builder = std::process::Command::new("curl");
-        builder.args(["-L", "-f", "-sS", "-o"]).arg(&dest).arg(&url);
+        // --progress-bar：进度写入 stderr（\r 分隔，含 xx%）
+        builder
+            .args(["-L", "-f", "--progress-bar", "-o"])
+            .arg(&dest)
+            .arg(&url)
+            .stderr(Stdio::piped());
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             builder.creation_flags(0x0800_0000);
         }
-        let out = builder.output();
-        match out {
-            Ok(o) if o.status.success() => {
-                emit("done", "下载完成");
+        let mut child = match builder.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                emit("error", None, &format!("启动下载失败：{e}"));
+                return;
             }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                emit("error", &format!("下载失败：{stderr}"));
+        };
+        let mut last_pct: u64 = 0;
+        if let Some(err) = child.stderr.take() {
+            let reader = BufReader::new(err);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                if let Some(idx) = line.rfind('%') {
+                    if let Ok(pct) = line[..idx].trim().parse::<u64>() {
+                        if pct >= last_pct + 5 || pct == 100 {
+                            last_pct = pct;
+                            emit("progress", Some(pct), &format!("下载中 {pct}%"));
+                        }
+                    }
+                }
             }
-            Err(e) => emit("error", &format!("下载失败：{e}")),
+        }
+        match child.wait() {
+            Ok(st) if st.success() => emit("done", Some(100), "下载完成"),
+            Ok(_) => emit("error", None, "下载失败"),
+            Err(e) => emit("error", None, &format!("下载失败：{e}")),
         }
     });
     Ok(dest_str)

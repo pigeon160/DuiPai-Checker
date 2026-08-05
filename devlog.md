@@ -558,3 +558,16 @@
 4. 行内项导轨（line-items）width:100% 与 margin/padding 叠加溢出——删除 width 修复
 
 测试 141 全绿。
+## v1.0.3-dev 模型通道代码接入（feature 默认关）（2026-08-05）
+
+- duipai-core 加 llama-cpp-2 optional 依赖 + nl-model feature（默认关闭，开启后首次编译 ~10 分钟）
+- model.rs：ModelManager（LlamaBackend + LlamaModel 单例、load/unload/is_loaded）、infer 真推理：
+  few-shot prompt → 生成循环（greedy，EOS 停止，max 512 token）→ 提取 DSL（去 code fence/DSL: 前缀）→
+  parse+validate 校验 → 失败重试 ≤2 次 → 置信度 0.85/0.75/0.65
+- nlg.rs 管道：规则未命中 → 模型就绪时推理兜底（method=Model）；否则低置信失败结果
+- commands.rs：model_load 真加载；model_download 精确进度（curl --progress-bar 解析 stderr 百分比，
+  每 5% 发 model://progress pct）；model_status.loaded = 真实加载状态
+- 前端 NlPanel：下载进度条、加载中状态、完成自动刷新状态
+- 构建要点：llama-cpp-sys-2 需要 libclang（已装 LLVM 22.1.8，LIBCLANG_PATH）；cmake 探测 OpenSSL 会
+  误用 msys2 头文件 → 用 VS 自带 cmake（3.31.6）且 PATH 移除 msys2
+- 端到端测试 #[ignore]：设置 DUIPAI_TEST_MODEL 指向 .gguf 后运行
