@@ -571,3 +571,12 @@
 - 构建要点：llama-cpp-sys-2 需要 libclang（已装 LLVM 22.1.8，LIBCLANG_PATH）；cmake 探测 OpenSSL 会
   误用 msys2 头文件 → 用 VS 自带 cmake（3.31.6）且 PATH 移除 msys2
 - 端到端测试 #[ignore]：设置 DUIPAI_TEST_MODEL 指向 .gguf 后运行
+## 模型通道端到端验证通过（2026-08-05）
+
+- 下载两个 GGUF（hf-mirror 镜像，huggingface.co 直连不通）：
+  qwen2.5-0.5b-instruct-q4_k_m.gguf（468MB）/ qwen2.5-1.5b-instruct-q4_k_m.gguf（1.04GB）
+- 修 4 个推理问题：n_batch/n_ctx 需显式设置（默认 512 不够）、采样需最后一个 token logits
+  （batch 末尾标记）、「DSL：」按字节数切（中文冒号 6 字节）、特殊 token 解码容错
+- 模型输出修复：截断到「描述」标记前（模型续写示例）；重名行内项自动改名（a→a2，≤4 次）
+- 0.5B 端到端 7.5s / 1.5B 17.5s 通过（parse+validate+generate 全链路）
+- 注意：feature 未开启时 release 构建不受影响；开启需 libclang（LLVM）+ 非 msys2 的 cmake

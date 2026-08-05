@@ -106,6 +106,7 @@ pub fn build_prompt(text: &str, last_error: Option<&str>) -> String {
     if let Some(e) = last_error {
         s.push_str(&format!("上次输出解析失败：{e}。请修正后重新输出。\n"));
     }
+    s.push_str("注意：只输出 DSL 代码本身，不要输出描述、解释或更多示例；变量名不要重复。\n");
     s.push_str("描述：");
     s.push_str(text.trim());
     s.push_str("\nDSL：\n");
@@ -231,25 +232,34 @@ mod llm {
             .model
             .str_to_token(prompt, AddBos::Always)
             .map_err(|e| format!("tokenize 失败：{e}"))?;
+
+        let ctx_params = LlamaContextParams::default()
+            .with_n_batch(4096)
+            .with_n_ctx(std::num::NonZeroU32::new(4096));
+
         let mut context = inner
             .model
-            .new_context(&inner.backend, LlamaContextParams::default())
+            .new_context(&inner.backend, ctx_params)
             .map_err(|e| format!("创建推理上下文失败：{e}"))?;
+
         let eos = inner.model.token_eos();
 
         let mut batch = LlamaBatch::new(tokens.len() + 512, 1);
         for (i, t) in tokens.iter().enumerate() {
+            // 最后一个 prompt token 需要 logits（供首次采样）
             batch
-                .add(*t, i as i32, &[0], false)
+                .add(*t, i as i32, &[0], i == tokens.len() - 1)
                 .map_err(|e| format!("batch 添加失败：{e}"))?;
         }
+        let mut sampler = LlamaSampler::greedy();
         let mut generated: Vec<_> = Vec::new();
         let mut pos = tokens.len() as i32;
+        let mut last_idx: i32 = tokens.len() as i32 - 1;
         for _ in 0..max_tokens {
             context
                 .decode(&mut batch)
                 .map_err(|e| format!("推理失败：{e}"))?;
-            let next = LlamaSampler::greedy().sample(&context, 0);
+            let next = sampler.sample(&context, last_idx);
             if next == eos {
                 break;
             }
@@ -258,27 +268,34 @@ mod llm {
             batch
                 .add(next, pos, &[0], true)
                 .map_err(|e| format!("batch 添加失败：{e}"))?;
+            last_idx = 0;
             pos += 1;
         }
+        // 采样器状态清理（重复惩罚等）
+        sampler.accept_many(&generated);
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut text = String::new();
         for t in &generated {
-            let piece = inner
-                .model
-                .token_to_piece(*t, &mut decoder, false, None)
-                .map_err(|e| format!("解码失败：{e}"))?;
-            text.push_str(&piece);
+            // special=true：特殊 token 也转文本；未知类型跳过（不中断）
+            if let Ok(piece) = inner.model.token_to_piece(*t, &mut decoder, true, None) {
+                text.push_str(&piece);
+            }
         }
         Ok(text)
     }
 
-    /// 从生成文本提取 DSL：去掉 code fence 与「DSL：」前缀。
+    /// 从生成文本提取 DSL：模型可能续写更多「描述/DSL」示例，
+    /// 取第一个「描述」标记前的 DSL 片段，去掉 code fence 与「DSL：」前缀。
     fn extract_dsl(raw: &str) -> String {
         let mut s = raw.trim().to_string();
-        // 模型有时会回显「DSL：」行
-        if let Some(idx) = s.find("DSL：") {
-            s = s[idx + 4..].to_string();
-        } else if let Some(idx) = s.find("DSL:") {
+        // 截断到第一个「描述」标记前（后续是模型续写的示例）
+        if let Some(end) = s.find("描述：").or_else(|| s.find("描述:")) {
+            s = s[..end].trim().to_string();
+        }
+        // 若以「DSL：」开头则去掉标记（取最后一个，内容可能在前面）
+        if let Some(idx) = s.rfind("DSL：") {
+            s = s[idx + "DSL：".len()..].to_string();
+        } else if let Some(idx) = s.rfind("DSL:") {
             s = s[idx + 4..].to_string();
         }
         let s = s.trim().to_string();
@@ -293,6 +310,37 @@ mod llm {
         s
     }
 
+    /// 轻量修复模型输出：第 `line` 行的行内项名与前面重复时自动改名（a → a2）。
+    fn fix_dup_name(dsl: &str, line: usize) -> Option<String> {
+        let lines: Vec<&str> = dsl.lines().collect();
+        let idx = line.checked_sub(1)?;
+        let l = *lines.get(idx)?;
+        let re = regex::Regex::new(r"^(\s*)(int|float|str|text|expr)\s+([A-Za-z_]\w*):").ok()?;
+        let cap = re.captures(l)?;
+        let name = cap.get(3)?.as_str();
+        let mut used: Vec<String> = lines
+            .iter()
+            .filter_map(|x| re.captures(x).map(|c| c.get(3).unwrap().as_str().to_string()))
+            .collect();
+        let mut i = 2;
+        let mut cand = format!("{name}{i}");
+        while used.contains(&cand) {
+            i += 1;
+            cand = format!("{name}{i}");
+        }
+        let fixed = l.replacen(&format!("{name}:"), &format!("{cand}:"), 1);
+        let mut out = lines[..idx].join("\n");
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&fixed);
+        if idx + 1 < lines.len() {
+            out.push('\n');
+            out.push_str(&lines[idx + 1..].join("\n"));
+        }
+        Some(out)
+    }
+
     pub fn infer(req: &ModelInferRequest) -> Result<ModelInferResult, String> {
         let mut guard = MANAGER.lock().map_err(|_| "模型管理器锁损坏".to_string())?;
         let inner = guard.as_mut().ok_or("模型未加载")?;
@@ -305,23 +353,39 @@ mod llm {
             for attempt in 0..3usize {
                 let prompt = build_prompt(&req.text, last_err.as_deref());
                 let raw = generate(inner, &prompt, 512)?;
-                let dsl = extract_dsl(&raw);
+
+                let mut dsl = extract_dsl(&raw);
                 if dsl.is_empty() {
                     last_err = Some("输出为空".to_string());
                     continue;
                 }
-                match crate::parser::parse(&dsl) {
-                    Ok(cfg) => {
-                        let errs = crate::validate::validate(&cfg);
-                        if errs.is_empty() {
-                            return Ok(ModelInferResult {
-                                dsl,
-                                confidence: 0.85 - attempt as f64 * 0.1,
-                            });
+                // 重名轻量修复：模型常见「变量名重复」错误 → 逐行改名后重新校验
+                for _ in 0..4 {
+                    match crate::parser::parse(&dsl) {
+                        Ok(cfg) => {
+                            let errs = crate::validate::validate(&cfg);
+                            if errs.is_empty() {
+                                return Ok(ModelInferResult {
+                                    dsl,
+                                    confidence: 0.85 - attempt as f64 * 0.1,
+                                });
+                            }
+                            last_err = Some(format!("DSL 语义错误：{}", errs[0].message));
+                            break;
                         }
-                        last_err = Some(format!("DSL 语义错误：{}", errs[0].message));
+                        Err(e) if e.message.contains("变量名重复") && e.line.is_some() => {
+                            if let Some(fixed) = fix_dup_name(&dsl, e.line.unwrap()) {
+                                dsl = fixed;
+                                continue;
+                            }
+                            last_err = Some(format!("DSL 解析错误：{}", e.message));
+                            break;
+                        }
+                        Err(e) => {
+                            last_err = Some(format!("DSL 解析错误：{}", e.message));
+                            break;
+                        }
                     }
-                    Err(e) => last_err = Some(format!("DSL 解析错误：{}", e.message)),
                 }
             }
             Err(format!("模型推理重试后仍无法生成合法 DSL：{}", last_err.unwrap_or_default()))

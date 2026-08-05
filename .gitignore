@@ -18,3 +18,4 @@ target/
 # Node / Tauri
 node_modules/
 src-tauri/gen/schemas/
+models/*.gguf
