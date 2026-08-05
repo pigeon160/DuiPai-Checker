@@ -8,9 +8,9 @@ export interface DslTemplate {
 export const DSL_TEMPLATES: DslTemplate[] = [
   {
     name: "经典多测（T 组）",
-    dsl: `repeat (t):
-    line:
-        int t: 1, 10
+    dsl: `line:
+    int t: 1, 10
+repeat (t):
     line:
         int n: 1, 100
         int m: 1, 100
@@ -85,9 +85,9 @@ pt = points(n, 0, 1000000000, 0, 1000000000)`,
   },
   {
     name: "多测 + 矩阵",
-    dsl: `repeat (t):
-    line:
-        int t: 1, 10
+    dsl: `line:
+    int t: 1, 10
+repeat (t):
     line:
         int n: 1, 50
         int m: 1, 50
