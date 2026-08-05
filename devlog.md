@@ -549,3 +549,12 @@
 - parser/serializer/generator/validate/nlg/model prompt 全链路支持
 - 前端：图形化树类型下拉加「父节点序列（1 为根）」+ 添加预设
 - 测试 140 全绿（parent 生成形态/带权/roundtrip/nlg）
+## v1.0.1 四项修复（2026-08-05）
+
+1. 对拍大规模数据死锁：runner stdin 写入与 stdout/stderr 读取拆两个线程——
+   大输入 + 大输出（>64KB 管道缓冲）边读边写不再互相阻塞（回归测试：200KB 输入 + 1MB 输出）
+2. 整数数组图形化表单不再显示精度输入（仅浮点数组显示 prec）
+3. tree(type="parent") 改为一行输出：n-1 个父节点（带权 2(n-1) 个）
+4. 行内项导轨（line-items）width:100% 与 margin/padding 叠加溢出——删除 width 修复
+
+测试 141 全绿。

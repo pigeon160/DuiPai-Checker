@@ -135,14 +135,15 @@ export function kindFields(kind: VarKind): F[] {
   const k = kind as Record<string, unknown>;
   switch (Object.keys(kind)[0]) {
     case "Array": {
-      const v = k.Array as { rows: string; cols: string; el_min: string; el_max: string; prec: string };
-      return [
+      const v = k.Array as { elem_type: ElemType; rows: string; cols: string; el_min: string; el_max: string; prec: string };
+      const fields: F[] = [
         { key: "rows", label: "行数", ph: v.rows },
         { key: "cols", label: "每行个数", ph: v.cols },
         { key: "el_min", label: "元素最小", ph: v.el_min },
         { key: "el_max", label: "元素最大", ph: v.el_max },
-        { key: "prec", label: "精度", ph: v.prec },
       ];
+      if (v.elem_type === "Float") fields.push({ key: "prec", label: "精度", ph: v.prec });
+      return fields;
     }
     case "Perm": {
       const v = k.Perm as { n: string };

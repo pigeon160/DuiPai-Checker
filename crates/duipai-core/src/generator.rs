@@ -432,18 +432,19 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                     }
                 }
                 crate::ast::TreeType::Parent => {
-                    // 以 1 为根：输出 n-1 行，第 i 行 = 节点 i+1 的父节点（随机 1..=i）
+                    // 以 1 为根：一行输出 n-1 个父节点（第 i 个 = 节点 i+1 的父节点，随机 1..=i）
+                    let mut parents: Vec<String> = Vec::with_capacity(n as usize - 1);
                     for i in 2..=n {
                         let p = ctx.int(1, i - 1);
                         match w.as_ref() {
-                            None => lines.push(p.to_string()),
+                            None => parents.push(p.to_string()),
                             Some(w) if w.kind == ElemType::Int => {
                                 let lo = ctx.ev(&w.min, "边权范围")? as i64;
                                 let hi = ctx.ev(&w.max, "边权范围")? as i64;
                                 if lo > hi {
                                     return Err(DslError::bare("边权范围最小值不能大于最大值"));
                                 }
-                                lines.push(format!("{p} {}", ctx.int(lo, hi)));
+                                parents.push(format!("{p} {}", ctx.int(lo, hi)));
                             }
                             Some(w) => {
                                 let lo = ctx.ev(&w.min, "边权范围")?;
@@ -455,10 +456,11 @@ fn gen_one(ctx: &mut GenCtx, item: &crate::ast::Item, lines: &mut Vec<String>) -
                                 if !(0..=15).contains(&prec) {
                                     return Err(DslError::bare("边权精度应在 0~15 之间"));
                                 }
-                                lines.push(format!("{p} {}", format_float(ctx.uniform(lo, hi), prec)));
+                                parents.push(format!("{p} {}", format_float(ctx.uniform(lo, hi), prec)));
                             }
                         }
                     }
+                    lines.push(parents.join(" "));
                     ctx.env.insert(name.clone(), EnvValue::Scalar(n as f64));
                     return Ok(());
                 }

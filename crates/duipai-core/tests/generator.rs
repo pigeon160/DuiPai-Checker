@@ -120,24 +120,23 @@ fn tree_star_chain() {
 
 #[test]
 fn tree_parent_shape() {
-    // 以 1 为根：输出 n-1 行，第 i 行 = 节点 i+1 的父节点（1..=i）
+    // 以 1 为根：一行输出 n-1 个父节点（第 i 个 = 节点 i+1 的父节点，1..=i）
     let cfg = parse("t = tree(6, type=\"parent\")\n").unwrap();
     let errs = validate(&cfg);
     assert!(errs.is_empty(), "{errs:?}");
     let lines = generate(&cfg, Some(3)).unwrap();
-    assert_eq!(lines.len(), 5, "parent 树输出 n-1=5 行：{lines:?}");
-    for (i, l) in lines.iter().enumerate() {
-        let p: i64 = l.parse().unwrap();
+    assert_eq!(lines.len(), 1, "parent 树一行输出：{lines:?}");
+    let parents: Vec<i64> = lines[0].split_whitespace().map(|x| x.parse().unwrap()).collect();
+    assert_eq!(parents.len(), 5, "n-1=5 个父节点");
+    for (i, p) in parents.iter().enumerate() {
         let node = (i + 2) as i64;
-        assert!((1..node).contains(&p), "节点 {node} 的父节点 {p} 应 < {node}");
+        assert!((1..node).contains(p), "节点 {node} 的父节点 {p} 应 < {node}");
     }
-    // 带权：每行 父节点 + 权值
+    // 带权：一行 2(n-1) 个数（父节点 权值 交替）
     let cfg = parse("t = tree(5, type=\"parent\", int(1, 9))\n").unwrap();
     let lines = generate(&cfg, Some(3)).unwrap();
-    assert_eq!(lines.len(), 4);
-    for l in &lines {
-        assert_eq!(l.split_whitespace().count(), 2, "带权父节点行：{l}");
-    }
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].split_whitespace().count(), 8, "带权一行 2*(n-1) 个数：{lines:?}");
 }
 
 #[test]

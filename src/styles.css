@@ -490,7 +490,7 @@ input.invalid,
   margin-top: 6px;
   padding-left: 14px;
   border-left: 2px solid #e3e0fb;
-  width: 100%;
+  box-sizing: border-box;
 }
 
 .line-items .multi-part {

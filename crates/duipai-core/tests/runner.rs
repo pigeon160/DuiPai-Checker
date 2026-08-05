@@ -43,6 +43,29 @@ fn run_with_stdin() {
 }
 
 #[test]
+fn big_input_big_output_no_deadlock() {
+    // 输入 ~200KB、输出 ~1MB（远超 64KB 管道缓冲）：边读边写不应死锁。
+    // powershell 逐行读 stdin 并原样输出（含处理阶段，模拟边读边输出）。
+    let n = 40_000usize;
+    let input: String = (0..n).map(|i| format!("{i}\n")).collect();
+    let script = "$sb = New-Object System.Text.StringBuilder; while (($l = [Console]::In.ReadLine()) -ne $null) { [void]$sb.AppendLine($l) }; Write-Output $sb.ToString()";
+    let r = run_program(
+        &format!("powershell -NoProfile -Command \"{script}\""),
+        "",
+        input.as_bytes(),
+        30.0,
+    );
+    assert_eq!(r.status, RunStatus::Ok, "大输入+大输出不应死锁: {:?}", r.status);
+    assert!(r.stdout.len() > n * 2, "输出应与输入规模相当: {} bytes", r.stdout.len());
+    let out = String::from_utf8_lossy(&r.stdout);
+    assert!(
+        out.starts_with("0\r\n") || out.starts_with("0\n"),
+        "输出应以输入开头: {:?}",
+        &out[..out.len().min(40)]
+    );
+}
+
+#[test]
 fn run_not_found() {
     let r = run_program("this_exe_should_not_exist_xyz_123", "", b"", 5.0);
     assert_eq!(r.status, RunStatus::Error);

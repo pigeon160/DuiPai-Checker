@@ -217,15 +217,18 @@ pub fn run_argv_ex(
         }
     };
 
-    // 写入 stdin 并读取输出
+    // 写 stdin 与读 stdout/stderr 分两个线程：大输入 + 大输出并发时不会
+    // 因管道缓冲（~64KB）互相阻塞而死锁。
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let input_owned = input.to_vec();
-    let reader = std::thread::spawn(move || {
+    let writer = std::thread::spawn(move || {
         if let Some(mut s) = stdin {
             let _ = s.write_all(&input_owned);
         }
+    });
+    let reader = std::thread::spawn(move || {
         let mut out = Vec::new();
         let mut err = Vec::new();
         if let Some(mut so) = stdout {
@@ -300,6 +303,7 @@ pub fn run_argv_ex(
             };
         }
     }
+    let _ = writer.join();
     let (out, err) = reader.join().unwrap_or((Vec::new(), Vec::new()));
     RunResult {
         status: RunStatus::Ok,
