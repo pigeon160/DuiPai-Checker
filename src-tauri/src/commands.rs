@@ -305,11 +305,14 @@ pub fn model_download(app: AppHandle, url: String) -> Result<String, String> {
             );
         };
         emit("start", &format!("开始下载 {name}…"));
-        let out = std::process::Command::new("curl")
-            .args(["-L", "-f", "-sS", "-o"])
-            .arg(&dest)
-            .arg(&url)
-            .output();
+        let mut builder = std::process::Command::new("curl");
+        builder.args(["-L", "-f", "-sS", "-o"]).arg(&dest).arg(&url);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            builder.creation_flags(0x0800_0000);
+        }
+        let out = builder.output();
         match out {
             Ok(o) if o.status.success() => {
                 emit("done", "下载完成");

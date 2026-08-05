@@ -378,7 +378,14 @@ pub fn compile_cpp(
     args.push(exe_str.clone());
 
     let start = std::time::Instant::now();
-    let output = match Command::new(compiler).args(&args[1..]).current_dir(&cwd).output() {
+    let mut builder = Command::new(compiler);
+    builder.args(&args[1..]).current_dir(&cwd);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        builder.creation_flags(0x0800_0000);
+    }
+    let output = match builder.output() {
         Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(DslError::bare(format!("找不到编译器：{compiler}")));
