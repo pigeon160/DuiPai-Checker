@@ -107,6 +107,11 @@ impl Parsed {
         "v".to_string()
     }
 
+    /// 命令变量名分配（t=tree、g=graph、M=matrix…）：固定名被占用时加序号（t2）。
+    fn take_fixed(&mut self, pref: &str) -> String {
+        self.take_name(pref)
+    }
+
     fn name_used(&mut self, name: &str) {
         if !self.used.contains(&name.to_string()) {
             self.used.push(name.to_string());
@@ -231,12 +236,35 @@ fn named_range_regexes() -> Vec<(String, String)> {
     .clone()
 }
 
+/// 无类型词行提取变量名（「first line contains n」「有一个 n」→ n）。
+fn extract_var_name(s: &str) -> Option<String> {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    let re = RX.get_or_init(|| Regex::new(r"[a-zA-Z_]\w*").expect("nlg var name regex"));
+    for m in re.find_iter(s) {
+        let w = m.as_str();
+        if is_name_str(w)
+            && !STOP_WORDS.contains(&w)
+            && !matches!(
+                w,
+                "first" | "second" | "line" | "lines" | "contains" | "has" | "have" | "case"
+                    | "cases" | "then" | "each" | "input" | "output" | "cnt" | "data"
+            )
+        {
+            return Some(w.to_string());
+        }
+    }
+    None
+}
+
 /// 无变量前缀的通用范围（「元素范围 1 到 100」），作为默认范围。
 fn bare_range(s: &str) -> Option<Range> {
     static RX: OnceLock<Regex> = OnceLock::new();
     let re = RX.get_or_init(|| {
+        let num = r"10\^\d+|10\*\*\d+|[0-9]+(?:\.[0-9]+)?e-?\d+|[0-9]+(?:\.[0-9]+)?";
         Regex::new(
-            r"(?:范围|取值|值域|元素|边权|权值|大小|每个(?:元素|数|整数|点|边))\s*(?:为|在|是|是)?\s*(?P<lo>[0-9]+(?:\.[0-9]+)?)\s*(?:~|～|至|到)\s*(?P<hi>[0-9]+(?:\.[0-9]+)?)",
+            &format!(
+                r"(?:范围|取值|值域|元素|边权|权值|大小|每个(?:元素|数|整数|点|边))\s*(?:为|在|是|是)?\s*(?P<lo>{num})\s*(?:~|～|至|到)\s*(?P<hi>{num})"
+            ),
         )
         .expect("nlg bare range regex")
     });
@@ -251,8 +279,13 @@ fn bare_range(s: &str) -> Option<Range> {
 fn weight_call(s: &str) -> Option<Range> {
     static RX: OnceLock<Regex> = OnceLock::new();
     let re = RX.get_or_init(|| {
-        Regex::new(r"(?:int|float)\s*\(\s*(?P<lo>[0-9]+(?:\.[0-9]+)?|[a-zA-Z_]\w*)\s*,\s*(?P<hi>[0-9]+(?:\.[0-9]+)?|[a-zA-Z_]\w*)\s*(?:,\s*[0-9]+(?:\.[0-9]+)?)?\s*\)")
-            .expect("nlg weight call regex")
+        let num = r"10\^\d+|10\*\*\d+|[0-9]+(?:\.[0-9]+)?e-?\d+|[0-9]+(?:\.[0-9]+)?|[a-zA-Z_]\w*";
+        Regex::new(
+            &format!(
+                r"(?:int|float)\s*\(\s*(?P<lo>{num})\s*,\s*(?P<hi>{num})\s*(?:,\s*[0-9]+(?:\.[0-9]+)?)?\s*\)"
+            ),
+        )
+        .expect("nlg weight call regex")
     });
     let cap = re.captures(s)?;
     Some(Range {
@@ -453,7 +486,7 @@ enum LineCtx {
 fn detect_rows_expr(s: &str) -> Option<String> {
     static RX: OnceLock<Regex> = OnceLock::new();
     let re = RX.get_or_init(|| {
-        Regex::new(r"(?:接下来|后面|随后|之后|剩余|next|following|remaining|subsequent|共|总共|then)?\s*(?P<n>[a-zA-Z_]\w*|[0-9]+|[一二两三四五六七八九十]+)\s*(?:行|组|lines?)").expect("nlg rows regex")
+        Regex::new(r"(?:接下来|后面|随后|之后|剩余|next|following|remaining|subsequent|共|总共|then)?\s*(?P<n>[a-zA-Z_]\w*|[0-9]+|[一二两三四五六七八九十]+)\s*(?:个|的)?\s*(?:行|组|lines?|查询)").expect("nlg rows regex")
     });
     if let Some(cap) = re.captures(s) {
         let n = cap.name("n")?.as_str();
@@ -525,11 +558,12 @@ fn detect_multi_test(text: &str) -> Option<String> {
     }
     static RX: OnceLock<Regex> = OnceLock::new();
     let re = RX.get_or_init(|| {
-        Regex::new(r"(?P<v>[tT])\s*(?:组|次|轮|个测试|组数据)|第一行一个整数\s*(?P<w>[tT])").expect("nlg mt regex")
+        Regex::new(r"(?P<v>[tT])\s*(?:组|次|轮|个测试|组数据|test cases?|tests?)|第一行一个整数\s*(?P<w>[tT])").expect("nlg mt regex")
     });
     for cap in re.captures_iter(text) {
         if let Some(v) = cap.name("v").or_else(|| cap.name("w")) {
-            return Some(v.as_str().to_lowercase());
+            // 保留原始大小写：「T 组」→ T（与命令变量 t=tree 不冲突）
+            return Some(v.as_str().to_string());
         }
     }
     Some("t".to_string())
@@ -633,6 +667,10 @@ fn theme_count(
             n
         }
         None => {
+            // 无显式数量（「一棵树」）：复用已定义的 n（如行块的 n），否则新建
+            if p.used.contains(&"n".to_string()) {
+                return "n".to_string();
+            }
             let n = p.take_name("n");
             let (lo, hi, def) = resolve(&n, ranges, None);
             if def {
@@ -644,6 +682,48 @@ fn theme_count(
         }
     };
     name
+}
+
+/// 生成数组/矩阵命令：rows=None → `v = ints/floats(count, lo, hi)`；
+/// rows=Some → `v = matrix(rows, count, lo, hi)`（「每行 N 个类型」场景）。
+/// count 为未定义变量时自动补定义行（implicit）。
+fn push_array_cmd(
+    count: &str,
+    rows: Option<&str>,
+    frag: &str,
+    p: &mut Parsed,
+    ranges: &[(String, Range)],
+    bare: Option<&Range>,
+    var: &str,
+) -> bool {
+    let count_expr = if is_name_str(count) && !p.used.iter().any(|u| u == count) {
+        p.name_used(count);
+        let (lo, hi, def) = resolve(count, ranges, None);
+        if def {
+            p.defaults = true;
+            p.warnings.push(format!("未识别 {count} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
+        }
+        p.implicit.push(NumItem { elem: Elem::Int, name: count.to_string(), lo, hi, prec: None });
+        count.to_string()
+    } else {
+        count.to_string()
+    };
+    let (elem, _) = detect_elem(frag).unwrap_or((Elem::Int, Vec::new()));
+    let (lo, hi, def) = resolve("a", ranges, bare);
+    if def {
+        p.defaults = true;
+        p.warnings.push("未识别数组元素范围，默认 1~100".into());
+    }
+    let v = p.take_fixed(var);
+    let cmd = match rows {
+        Some(r) => format!("{v} = matrix({r}, {count_expr}, {lo}, {hi})"),
+        None => format!(
+            "{v} = {}({count_expr}, {lo}, {hi})",
+            if elem == Elem::Float { "floats" } else { "ints" }
+        ),
+    };
+    p.blocks.push(Block::Cmd(cmd));
+    true
 }
 
 /// 把一段描述解析成 Parsed；无任何结构命中返回 None。
@@ -661,74 +741,62 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         match ctx {
             Some(LineCtx::Single) => {
                 p.hit = true;
-                let items = items_from_clause(&frag, &mut p, &ranges, bare.as_ref());
+                // 无类型词：先试数量（「第二行 n 个数」→ 数组），再试变量名（「first line contains n」→ int n）
+                if detect_elem(&frag).is_none() {
+                    if let Some(count) = detect_count(&frag) {
+                        if push_array_cmd(&count, None, &frag, &mut p, &ranges, bare.as_ref(), "a") {
+                            continue;
+                        }
+                    }
+                    if let Some(name) = extract_var_name(&frag) {
+                        p.name_used(&name);
+                        let (lo, hi, def) = resolve(&name, &ranges, None);
+                        if def {
+                            p.defaults = true;
+                            p.warnings.push(format!("未识别 {name} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
+                        }
+                        let items = vec![NumItem { elem: Elem::Int, name, lo, hi, prec: None }];
+                        p.blocks.push(Block::Line { rows: "1".to_string(), items });
+                        continue;
+                    }
+                }
+                let items = items_from_clause(&frag, &mut p, &ranges);
                 p.blocks.push(Block::Line { rows: "1".to_string(), items });
             }
             Some(LineCtx::Rows) => {
                 p.hit = true;
                 let rows = detect_rows_expr(&frag).unwrap_or_else(|| "n".to_string());
-                if rows != "1" && is_name_str(&rows) {
+                if rows != "1" && is_name_str(&rows) && !p.used.contains(&rows) {
                     p.name_used(&rows);
+                    let (lo, hi, def) = resolve(&rows, &ranges, None);
+                    if def {
+                        p.defaults = true;
+                        p.warnings.push(format!("未识别 {rows} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
+                    }
+                    p.implicit.push(NumItem { elem: Elem::Int, name: rows.clone(), lo, hi, prec: None });
                 }
-                // 「每行 N 个类型」（N ≠ 1 且片段内单一类型词）→ 矩阵：
+                // 「每行 N 个类型」（N ≠ 1、单类型词、类型词后无变量名）→ 矩阵：
                 // 「接下来 n 行每行 m 个整数」= n 行 m 列 → M = matrix(n, m, …)
                 let per_row = detect_count(&frag);
                 let single_type = count_type_words(&frag) <= 1;
+                let has_vars = detect_elem(&frag)
+                    .map(|(_, v)| !v.is_empty())
+                    .unwrap_or(false);
                 if let Some(count) = per_row {
-                    if count != "1" && single_type {
-                        let count_expr = if is_name_str(&count) && !p.used.contains(&count) {
-                            p.name_used(&count);
-                            let (lo, hi, def) = resolve(&count, &ranges, None);
-                            if def {
-                                p.defaults = true;
-                                p.warnings.push(format!("未识别 {count} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
-                            }
-                            p.implicit.push(NumItem { elem: Elem::Int, name: count.clone(), lo, hi, prec: None });
-                            count
-                        } else {
-                            count
-                        };
-                        let (elem, _) = detect_elem(&frag).unwrap_or((Elem::Int, Vec::new()));
-                        let (lo, hi, def) = resolve("a", &ranges, bare.as_ref());
-                        if def {
-                            p.defaults = true;
-                            p.warnings.push("未识别矩阵元素范围，默认 1~100".into());
+                    if count != "1" && single_type && !has_vars {
+                        if push_array_cmd(&count, Some(&rows), &frag, &mut p, &ranges, bare.as_ref(), "M") {
+                            continue;
                         }
-                        p.blocks.push(Block::Cmd(format!(
-                            "M = matrix({rows}, {count_expr}, {lo}, {hi})",
-                        )));
-                        continue;
                     }
                 }
-                let items = items_from_clause(&frag, &mut p, &ranges, bare.as_ref());
+                let items = items_from_clause(&frag, &mut p, &ranges);
                 p.blocks.push(Block::Line { rows, items });
             }
             None => {
                 // 非行片段：数组检测（「N 个整数」等）
                 if let Some(count) = detect_count(&frag) {
                     p.hit = true;
-                    let count_expr = if is_name_str(&count) && !p.used.contains(&count) {
-                        p.name_used(&count);
-                        let (lo, hi, def) = resolve(&count, &ranges, None);
-                        if def {
-                            p.defaults = true;
-                            p.warnings.push(format!("未识别 {count} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
-                        }
-                        p.implicit.push(NumItem { elem: Elem::Int, name: count.clone(), lo, hi, prec: None });
-                        count
-                    } else {
-                        count
-                    };
-                    let (elem, _) = detect_elem(&frag).unwrap_or((Elem::Int, Vec::new()));
-                    let (lo, hi, def) = resolve("a", &ranges, bare.as_ref());
-                    if def {
-                        p.defaults = true;
-                        p.warnings.push("未识别数组元素范围，默认 1~100".into());
-                    }
-                    p.blocks.push(Block::Cmd(format!(
-                        "a = {}({count_expr}, {lo}, {hi})",
-                        if elem == Elem::Float { "floats" } else { "ints" }
-                    )));
+                    push_array_cmd(&count, None, &frag, &mut p, &ranges, bare.as_ref(), "a");
                 }
             }
         }
@@ -778,16 +846,17 @@ fn rule_convert(text: &str) -> Option<Parsed> {
                 p.defaults = true;
                 p.warnings.push("未识别边权范围，默认 1~100".into());
             }
+            let tv = p.take_fixed("t");
             let args = if has_w(clause) {
                 if ttype.is_empty() {
-                    format!("t = tree({n}, int({lo}, {hi}))")
+                    format!("{tv} = tree({n}, int({lo}, {hi}))")
                 } else {
-                    format!("t = tree({n}, {ttype}, int({lo}, {hi}))")
+                    format!("{tv} = tree({n}, {ttype}, int({lo}, {hi}))")
                 }
             } else if ttype.is_empty() {
-                format!("t = tree({n})")
+                format!("{tv} = tree({n})")
             } else {
-                format!("t = tree({n}, {ttype})")
+                format!("{tv} = tree({n}, {ttype})")
             };
             p.blocks.push(Block::Cmd(args));
             continue;
@@ -827,7 +896,8 @@ fn rule_convert(text: &str) -> Option<Parsed> {
             } else {
                 String::new()
             };
-            p.blocks.push(Block::Cmd(format!("g = graph({n}, {m}, {d}, {c}{extra})")));
+            let gv = p.take_fixed("g");
+            p.blocks.push(Block::Cmd(format!("{gv} = graph({n}, {m}, {d}, {c}{extra})")));
             continue;
         }
         // 排列
@@ -835,7 +905,8 @@ fn rule_convert(text: &str) -> Option<Parsed> {
             seen_perm = true;
             p.hit = true;
             let n = theme_count(clause, &["排列", "perm"], &mut p, &ranges);
-            p.blocks.push(Block::Cmd(format!("p = perm({n})")));
+            let pv = p.take_fixed("p");
+            p.blocks.push(Block::Cmd(format!("{pv} = perm({n})")));
             continue;
         }
         // 区间
@@ -845,7 +916,8 @@ fn rule_convert(text: &str) -> Option<Parsed> {
             let n = theme_count(clause, &["区间"], &mut p, &ranges);
             let (lo, _, _) = resolve("l", &ranges, bare.as_ref());
             let (_, hi, _) = resolve("r", &ranges, bare.as_ref());
-            p.blocks.push(Block::Cmd(format!("iv = intervals({n}, {lo}, {hi})")));
+            let ivv = p.take_fixed("iv");
+            p.blocks.push(Block::Cmd(format!("{ivv} = intervals({n}, {lo}, {hi})")));
             continue;
         }
         // 点集
@@ -859,7 +931,8 @@ fn rule_convert(text: &str) -> Option<Parsed> {
             let (_, xhi, _) = resolve("x", &ranges, bare.as_ref());
             let (ylo, _, _) = resolve("y", &ranges, bare.as_ref());
             let (_, yhi, _) = resolve("y", &ranges, bare.as_ref());
-            p.blocks.push(Block::Cmd(format!("pt = points({n}, {xlo}, {xhi}, {ylo}, {yhi})")));
+            let ptv = p.take_fixed("pt");
+            p.blocks.push(Block::Cmd(format!("{ptv} = points({n}, {xlo}, {xhi}, {ylo}, {yhi})")));
             continue;
         }
         // 矩阵
@@ -909,7 +982,7 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         'outer: for b in &mut p.blocks {
             if let Block::Line { items, .. } = b {
                 for (i, it) in items.iter().enumerate() {
-                    if it.name.to_lowercase() == *v {
+                    if it.name.to_lowercase() == v.to_lowercase() {
                         reused = Some((it.lo.clone(), it.hi.clone()));
                         items.remove(i);
                         break 'outer;
@@ -925,7 +998,7 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         // 行块 rows 若引用计数变量（「接下来 T 组」→ line (t)）统一改名
         for b in &mut p.blocks {
             if let Block::Line { rows, .. } = b {
-                if rows.to_lowercase() == *v {
+                if rows.to_lowercase() == v.to_lowercase() {
                     *rows = v.clone();
                 }
             }
@@ -933,7 +1006,7 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         let (lo, hi, def) = match reused {
             Some((l, h)) => (l, h, false),
             None => {
-                let (l, h, d) = resolve(v, &ranges, bare.as_ref());
+                let (l, h, d) = resolve(v, &ranges, None);
                 (l, h, d)
             }
         };
@@ -956,7 +1029,6 @@ fn items_from_clause(
     clause: &str,
     p: &mut Parsed,
     ranges: &[(String, Range)],
-    bare: Option<&Range>,
 ) -> Vec<NumItem> {
     let mut items: Vec<NumItem> = Vec::new();
     let prec = detect_prec(clause);
@@ -996,9 +1068,12 @@ fn items_from_clause(
             } else {
                 used_in_clause.push(name.clone());
             }
+            // 行内项全局可见：显式/自动名都登记（供主题数量检测与后续引用）
+            p.name_used(name);
         }
         for name in vars {
-            let (lo, hi, def) = resolve(&name, ranges, bare);
+            // 行内项范围只用显式 ranges + 默认（bare 范围（如边权）不污染行内项）
+            let (lo, hi, def) = resolve(&name, ranges, None);
             if def {
                 p.defaults = true;
                 p.warnings.push(format!("未识别 {name} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
@@ -1017,7 +1092,7 @@ fn items_from_clause(
         p.defaults = true;
         p.warnings.push("未识别行内数据类型，默认生成一个整数项".into());
         let name = p.take_name("a");
-        let (lo, hi, def) = resolve(&name, ranges, bare);
+        let (lo, hi, def) = resolve(&name, ranges, None);
         if def {
             p.warnings.push(format!("未识别 {name} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
         }
@@ -1157,12 +1232,18 @@ pub fn rule_to_dsl(text: &str) -> Option<NlResult> {
                 warnings,
             })
         }
-        Err(e) => Some(NlResult {
-            dsl: String::new(),
-            confidence: 0.0,
-            method: NlMethod::Rule,
-            warnings: vec![format!("规则生成结果未通过解析：{}", e.message)],
-        }),
+        Err(e) => {
+            let _ = std::fs::write(
+                "C:\\Users\\pigeon\\AppData\\Local\\Temp\\opencode\\raw.txt",
+                &dsl,
+            );
+            Some(NlResult {
+                dsl: String::new(),
+                confidence: 0.0,
+                method: NlMethod::Rule,
+                warnings: vec![format!("规则生成结果未通过解析：{}", e.message)],
+            })
+        }
     }
 }
 
@@ -1282,7 +1363,7 @@ mod tests {
     fn nested_group_matrix() {
         // 每组内：第一行 n m + 接下来 n 行每行 m 个整数 → 块内矩阵
         let r = conv("T 组数据，每组：第一行 n m，接下来 n 行每行 m 个整数");
-        assert!(r.dsl.contains("repeat (t):"), "{}", r.dsl);
+        assert!(r.dsl.contains("repeat (T):"), "{}", r.dsl);
         assert!(r.dsl.contains("M = matrix(n, m, 1, 100)"), "{}", r.dsl);
         assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
     }
@@ -1298,14 +1379,14 @@ mod tests {
     #[test]
     fn multi_test_mixed_theme() {
         let r = conv("T 组数据，每组：第一行 n m，接下来 n 行每行 m 个整数");
-        assert!(r.dsl.contains("repeat (t):"), "{}", r.dsl);
+        assert!(r.dsl.contains("repeat (T):"), "{}", r.dsl);
         assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
     }
 
     #[test]
     fn english_multi_test() {
         let r = conv("T test cases. each test case: first line contains n, then n lines with m integers");
-        assert!(r.dsl.contains("repeat (t):"), "{}", r.dsl);
+        assert!(r.dsl.contains("repeat (T):"), "{}", r.dsl);
         assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
     }
 
@@ -1320,7 +1401,7 @@ mod tests {
     #[test]
     fn multi_test_first_line() {
         let r = conv("多测，T 组。第一行一个整数 n (1<=n<=10^5)，接下来 n 行每行一个整数 x");
-        assert!(r.dsl.contains("repeat (t):"), "{}", r.dsl);
+        assert!(r.dsl.contains("repeat (T):"), "{}", r.dsl);
         assert!(r.dsl.contains("int n: 1, 100000"), "{}", r.dsl);
         assert!(r.dsl.contains("    line (n):\n        int x: 1, 100"), "{}", r.dsl);
     }
@@ -1422,8 +1503,8 @@ mod tests {
     #[test]
     fn multi_test_with_explicit_t() {
         let r = conv("第一行一个整数 T (1<=T<=10)，接下来 T 组，每组第一行一个整数 n，然后 n 行每行一个整数");
-        assert!(r.dsl.contains("repeat (t):"), "warn={:?} dsl={}", r.warnings, r.dsl);
-        assert!(r.dsl.contains("int t: 1, 10"), "{}", r.dsl);
+        assert!(r.dsl.contains("repeat (T):"), "warn={:?} dsl={}", r.warnings, r.dsl);
+        assert!(r.dsl.contains("int T: 1, 10"), "{}", r.dsl);
         assert!(r.dsl.contains("line (n):"), "{}", r.dsl);
     }
 
