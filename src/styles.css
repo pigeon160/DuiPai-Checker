@@ -824,3 +824,5 @@ input.invalid,
 }
 .repeat-add { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
 .repeat-label { font-size: 13px; color: var(--text-2); }
+.toolbar-select { max-width: 170px; height: 30px; font-size: 13px; }
+.save-name-input { width: 90px; height: 28px; font-size: 13px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 6px; }

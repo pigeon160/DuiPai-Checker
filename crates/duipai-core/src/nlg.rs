@@ -57,17 +57,6 @@ enum Elem {
     Text,
 }
 
-impl Elem {
-    fn label(self) -> &'static str {
-        match self {
-            Elem::Int => "int",
-            Elem::Float => "float",
-            Elem::Str => "str",
-            Elem::Text => "text",
-        }
-    }
-}
-
 /// 单个数项：`类型 名字: 范围`。
 #[derive(Debug, Clone)]
 struct NumItem {
@@ -98,8 +87,12 @@ struct Parsed {
     hit: bool,
     /// 是否有默认推断（拉低置信度）。
     defaults: bool,
-    /// 多测（repeat 块）计数变量名。
+    /// 多测（repeat 块）计数变量名（定义在 repeat 块外）。
     repeat_var: Option<String>,
+    /// 多测计数变量的定义行（repeat 块外的 line: int t）。
+    repeat_count: Option<NumItem>,
+    /// 隐式数量变量定义（树/图/数组等的 n/m，未显式定义时自动补行）。
+    implicit: Vec<NumItem>,
 }
 
 impl Parsed {
@@ -191,7 +184,7 @@ struct Range {
 fn named_range_regexes() -> Vec<(String, String)> {
     static RX: OnceLock<Vec<(String, String)>> = OnceLock::new();
     RX.get_or_init(|| {
-        let num = r"[0-9]+(?:\.[0-9]+)?|10\^\d+|10\*\*\d+|[0-9]+(?:\.[0-9]+)?e-?\d+";
+        let num = r"10\^\d+|10\*\*\d+|[0-9]+(?:\.[0-9]+)?e-?\d+|[0-9]+(?:\.[0-9]+)?";
         vec![
             // (lo <= v <= hi) / (1≤n≤100)
             (
@@ -279,9 +272,12 @@ fn extract_ranges(s: &str) -> Vec<(String, Range)> {
             out.push((v.to_string(), Range { lo, hi }));
         }
     }
-    // 无括号形式：lo <= v, w <= hi（多变量共界）
+    // 无括号形式：lo <= v, w <= hi（多变量共界）；支持 10^ 形式与 3 段链 lo<=a<=b<=hi
+    let num_any = r"10\^\d+|10\*\*\d+|[0-9]+(?:\.[0-9]+)?e-?\d+|[0-9]+(?:\.[0-9]+)?";
     let bare_bound = Regex::new(
-        r"(?P<lo>[0-9]+(?:\.[0-9]+)?)\s*[≤<][=]?\s*(?P<v>[a-zA-Z_]\w*(?:\s*[,，]\s*[a-zA-Z_]\w*){0,3})\s*[≤<][=]?\s*(?P<hi>[0-9]+(?:\.[0-9]+)?)",
+        &format!(
+            r"(?P<lo>{num_any})\s*[≤<][=]?\s*(?P<v>[a-zA-Z_]\w*(?:\s*[,，]\s*[a-zA-Z_]\w*)*)\s*[≤<][=]?\s*(?P<hi>{num_any})"
+        ),
     )
     .expect("nlg bare bound regex");
     for cap in bare_bound.captures_iter(s) {
@@ -292,6 +288,23 @@ fn extract_ranges(s: &str) -> Vec<(String, Range)> {
         let lo = cap.name("lo").map(|m| norm_num(m.as_str())).unwrap_or_else(|| "1".into());
         let hi = cap.name("hi").map(|m| norm_num(m.as_str())).unwrap_or_else(|| "100".into());
         for v in vars {
+            if is_name_str(v) && !is_type_word(v) && !out.iter().any(|(n, _)| n == v) {
+                out.push((v.to_string(), Range { lo: lo.clone(), hi: hi.clone() }));
+            }
+        }
+    }
+    // 3 段链：lo <= a <= b <= hi（如 1<=l<=r<=10^9）→ a、b 同界
+    let chain = Regex::new(
+        &format!(
+            r"(?P<lo>{num_any})\s*[≤<][=]?\s*(?P<a>[a-zA-Z_]\w*)\s*[≤<][=]?\s*(?P<b>[a-zA-Z_]\w*)\s*[≤<][=]?\s*(?P<hi>{num_any})"
+        ),
+    )
+    .expect("nlg chain regex");
+    for cap in chain.captures_iter(s) {
+        let lo = cap.name("lo").map(|m| norm_num(m.as_str())).unwrap_or_else(|| "1".into());
+        let hi = cap.name("hi").map(|m| norm_num(m.as_str())).unwrap_or_else(|| "100".into());
+        for v in [cap.name("a"), cap.name("b")].into_iter().flatten() {
+            let v = v.as_str();
             if is_name_str(v) && !is_type_word(v) && !out.iter().any(|(n, _)| n == v) {
                 out.push((v.to_string(), Range { lo: lo.clone(), hi: hi.clone() }));
             }
@@ -319,27 +332,17 @@ const DEFAULT_HI: &str = "100";
 
 /// 识别类型词，返回 (类型, 类型词后方的变量名列表)。
 fn detect_elem(s: &str) -> Option<(Elem, Vec<String>)> {
-    static RX: OnceLock<Regex> = OnceLock::new();
-    let re = RX.get_or_init(|| {
-        Regex::new(
-            r"(浮点数|整型|整数|实数|小数|浮点型|浮点|字符串|字符型|字符|文本|数字|integers|integer|floats|float|numbers|number|elements|element|string|double|real|char|int)",
-        )
-        .expect("nlg elem regex")
-    });
-    let is_ascii_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    // 取第一个前后都不是 ASCII 字母/数字/下划线的类型词（防止匹配 "contains" 里的 "int"）
-    let m = re.find_iter(s).find(|m| {
-        let before = m.start() > 0 && is_ascii_word(s.as_bytes()[m.start() - 1]);
-        let after = m.end() < s.len() && is_ascii_word(s.as_bytes()[m.end()]);
-        !before && !after
-    })?;
-    let elem = match m.as_str() {
-        "浮点数" | "实数" | "小数" | "浮点" | "浮点型" | "real" | "float" | "floats" | "double" => Elem::Float,
+    let (start, len) = detect_elem_pos(s)?;
+    let kind = &s[start..start + len];
+    let elem = match kind {
+        "浮点数" | "实数" | "小数" | "浮点" | "浮点型" | "real" | "float" | "floats" | "double" => {
+            Elem::Float
+        }
         "字符串" | "字符" | "字符型" | "string" | "char" => Elem::Str,
         "文本" | "text" => Elem::Text,
         _ => Elem::Int,
     };
-    Some((elem, after_vars(s, m.end())))
+    Some((elem, after_vars(s, start + len)))
 }
 
 /// 取类型词之后的变量名列表（最多 3 个）。
@@ -382,13 +385,41 @@ fn detect_count(s: &str) -> Option<String> {
     static RX: OnceLock<Regex> = OnceLock::new();
     let re = RX.get_or_init(|| {
         Regex::new(
-            r"(?P<n>[a-zA-Z_]\w*|[0-9]+|[一二两三四五六七八九十]+)\s*(?:个|枚|只|位)?\s*(?:整数|整型|浮点数|实数|小数|字符串|字符|数字|integer|integers|float|floats|real|number|numbers|char|string)",
+            r"(?P<n>[a-zA-Z_]\w*|[0-9]+|[一二两三四五六七八九十]+)\s*(?P<unit>个|枚|只|位)?\s*(?P<type>整数|整型|浮点数|实数|小数|字符串|字符|数字|integer|integers|float|floats|real|number|numbers|char|string)",
         )
         .expect("nlg count regex")
     });
-    let cap = re.captures(s)?;
-    let n = cap.name("n")?.as_str();
-    num_str(n).or_else(|| is_name_str(n).then(|| n.to_string()))
+    for cap in re.captures_iter(s) {
+        let n = cap.name("n")?.as_str();
+        let unit = cap.name("unit").map(|m| m.as_str()).unwrap_or("");
+        let ty = cap.name("type")?.as_str();
+        // 精度语境（「3 位小数」「保留 3 位小数」）不算数量
+        if ty == "小数" && unit == "位" {
+            continue;
+        }
+        if let Some(v) = num_str(n) {
+            return Some(v);
+        }
+        if is_name_str(n) {
+            return Some(n.to_string());
+        }
+    }
+    None
+}
+
+/// 浮点精度提取：「保留 3 位小数」「精度 3」「3 位小数」。
+fn detect_prec(s: &str) -> Option<String> {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    let re = RX.get_or_init(|| {
+        Regex::new(r"(?:保留|精度|精确到|取|四舍五入到)?\s*(?P<p>[0-9]+)\s*(?:位|位小数|位有效数字|位精度)?(?:小数|精度)?").expect("nlg prec regex")
+    });
+    for cap in re.captures_iter(s) {
+        let p = cap.name("p")?.as_str();
+        if let Some(v) = num_str(p) {
+            return Some(v);
+        }
+    }
+    None
 }
 
 /// 行上下文。
@@ -530,6 +561,72 @@ fn resolve(
 }
 
 /// 把一段描述解析成 Parsed；无任何结构命中返回 None。
+/// 主题数量：提取「N 个点/条边/区间…」的数量表达式。
+/// 已定义的变量名直接引用；未定义的变量自动补定义行（implicit）；数字直接用。
+fn theme_count(
+    clause: &str,
+    keys: &[&str],
+    p: &mut Parsed,
+    ranges: &[(String, Range)],
+) -> String {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    let re = RX.get_or_init(|| {
+        Regex::new(
+            r"(?P<n>[a-zA-Z_]\w*|[0-9]+|[一二两三四五六七八九十]+)\s*(?:(?:[一二两三四五六七八九十]+个?|个|的|个的)\s*)*(?P<k>点|顶点|条边|条|区间|点对|行|列|排列|perm)",
+        )
+        .expect("nlg theme count regex")
+    });
+    let mut cand: Option<String> = None;
+    for cap in re.captures_iter(clause) {
+        let k = cap.name("k").map(|m| m.as_str()).unwrap_or("");
+        if !keys.iter().any(|x| *x == k) {
+            continue;
+        }
+        let n = cap.name("n").map(|m| m.as_str()).unwrap_or("");
+        // 冠词「一个排列」「一个区间」的「一」不算数量
+        let seg = &clause[cap.get(0).unwrap().start()..cap.get(0).unwrap().end()];
+        if cn_num(n).is_some() && seg.starts_with("一个") {
+            continue;
+        }
+        if let Some(v) = num_str(n) {
+            cand = Some(v);
+            break;
+        }
+        if is_name_str(n) {
+            cand = Some(n.to_string());
+            break;
+        }
+    }
+    let name = match cand {
+        Some(n) if is_name_str(&n) && p.used.contains(&n) => n,
+        Some(n) => {
+            if !is_name_str(&n) {
+                return n;
+            }
+            p.name_used(&n);
+            let (lo, hi, def) = resolve(&n, ranges, None);
+            if def {
+                p.defaults = true;
+                p.warnings.push(format!("未识别 {n} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
+            }
+            p.implicit.push(NumItem { elem: Elem::Int, name: n.clone(), lo, hi, prec: None });
+            n
+        }
+        None => {
+            let n = p.take_name("n");
+            let (lo, hi, def) = resolve(&n, ranges, None);
+            if def {
+                p.defaults = true;
+                p.warnings.push(format!("未识别 {n} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
+            }
+            p.implicit.push(NumItem { elem: Elem::Int, name: n.clone(), lo, hi, prec: None });
+            n
+        }
+    };
+    name
+}
+
+/// 把一段描述解析成 Parsed；无任何结构命中返回 None。
 fn rule_convert(text: &str) -> Option<Parsed> {
     let mut p = Parsed::default();
     let ranges = extract_ranges(text);
@@ -539,7 +636,53 @@ fn rule_convert(text: &str) -> Option<Parsed> {
     // 多测（全文扫描）
     let multi_var = detect_multi_test(text);
 
-    // ---- 主题结构（树/图/排列/区间/点集/矩阵）：对整段文本检测，各只生成一次 ----
+    // ---- 1) 行片段 / 数组（先处理：显式变量（如第一行的 n）先定义，供主题引用）----
+    for (frag, ctx) in segment_lines(text) {
+        match ctx {
+            Some(LineCtx::Single) | Some(LineCtx::Rows) => {
+                p.hit = true;
+                let rows = match ctx.unwrap() {
+                    LineCtx::Single => "1".to_string(),
+                    LineCtx::Rows => detect_rows_expr(&frag).unwrap_or_else(|| "n".to_string()),
+                };
+                if rows != "1" && is_name_str(&rows) {
+                    p.name_used(&rows);
+                }
+                let items = items_from_clause(&frag, &mut p, &ranges, bare.as_ref());
+                p.blocks.push(Block::Line { rows, items });
+            }
+            None => {
+                // 非行片段：数组检测（「N 个整数」等）
+                if let Some(count) = detect_count(&frag) {
+                    p.hit = true;
+                    let count_expr = if is_name_str(&count) && !p.used.contains(&count) {
+                        p.name_used(&count);
+                        let (lo, hi, def) = resolve(&count, &ranges, None);
+                        if def {
+                            p.defaults = true;
+                            p.warnings.push(format!("未识别 {count} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
+                        }
+                        p.implicit.push(NumItem { elem: Elem::Int, name: count.clone(), lo, hi, prec: None });
+                        count
+                    } else {
+                        count
+                    };
+                    let (elem, _) = detect_elem(&frag).unwrap_or((Elem::Int, Vec::new()));
+                    let (lo, hi, def) = resolve("a", &ranges, bare.as_ref());
+                    if def {
+                        p.defaults = true;
+                        p.warnings.push("未识别数组元素范围，默认 1~100".into());
+                    }
+                    p.blocks.push(Block::Cmd(format!(
+                        "a = {}({count_expr}, {lo}, {hi})",
+                        if elem == Elem::Float { "floats" } else { "ints" }
+                    )));
+                }
+            }
+        }
+    }
+
+    // ---- 2) 主题结构（树/图/排列/区间/点集/矩阵）：对整段文本检测，各只生成一次 ----
     let mut seen_tree = false;
     let mut seen_graph = false;
     let mut seen_perm = false;
@@ -555,7 +698,7 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         if !seen_tree && (clause.contains("树") || clause.contains("tree")) {
             seen_tree = true;
             p.hit = true;
-            let n = p.take_name("n");
+            let n = theme_count(clause, &["点", "顶点"], &mut p, &ranges);
             let ttype = if clause.contains("菊花") || clause.contains("星") {
                 "type=\"star\""
             } else if clause.contains("链") {
@@ -570,8 +713,8 @@ fn rule_convert(text: &str) -> Option<Parsed> {
                 match r {
                     Some(r) => (r.lo, r.hi, false),
                     None => {
-                        let (lo, hi, d) = resolve(&n, &ranges, bare.as_ref());
-                        (lo, hi, d)
+                        let (l, h, d) = resolve(&n, &ranges, bare.as_ref());
+                        (l, h, d)
                     }
                 }
             } else {
@@ -599,8 +742,8 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         if !seen_graph && (clause.contains("graph") || clause.contains("边") || (clause.contains("图") && !clause.contains("树"))) {
             seen_graph = true;
             p.hit = true;
-            let n = p.take_name("n");
-            let m = p.take_name("m");
+            let n = theme_count(clause, &["点", "顶点"], &mut p, &ranges);
+            let m = theme_count(clause, &["条边", "条"], &mut p, &ranges);
             let d = if has_directed(clause) { "1" } else { "0" };
             let c = if has_connected(clause) { "1" } else { "0" };
             let (mut lo, mut hi, mut def) = (String::new(), String::new(), false);
@@ -637,7 +780,7 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         if !seen_perm && (clause.contains("排列") || clause.contains("perm")) {
             seen_perm = true;
             p.hit = true;
-            let n = p.take_name("n");
+            let n = theme_count(clause, &["排列", "perm"], &mut p, &ranges);
             p.blocks.push(Block::Cmd(format!("p = perm({n})")));
             continue;
         }
@@ -645,12 +788,9 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         if !seen_iv && (clause.contains("区间") || clause.contains("interval")) {
             seen_iv = true;
             p.hit = true;
-            let n = p.take_name("n");
-            let (lo, hi, def) = resolve(&n, &ranges, bare.as_ref());
-            if def {
-                p.defaults = true;
-                p.warnings.push("未识别区间范围，默认 1~100".into());
-            }
+            let n = theme_count(clause, &["区间"], &mut p, &ranges);
+            let (lo, _, _) = resolve("l", &ranges, bare.as_ref());
+            let (_, hi, _) = resolve("r", &ranges, bare.as_ref());
             p.blocks.push(Block::Cmd(format!("iv = intervals({n}, {lo}, {hi})")));
             continue;
         }
@@ -660,13 +800,12 @@ fn rule_convert(text: &str) -> Option<Parsed> {
         {
             seen_pts = true;
             p.hit = true;
-            let n = p.take_name("n");
-            let (lo, hi, def) = resolve(&n, &ranges, bare.as_ref());
-            if def {
-                p.defaults = true;
-                p.warnings.push("未识别坐标范围，默认 1~100".into());
-            }
-            p.blocks.push(Block::Cmd(format!("pt = points({n}, {lo}, {hi}, {lo}, {hi})")));
+            let n = theme_count(clause, &["点", "点对"], &mut p, &ranges);
+            let (xlo, _, _) = resolve("x", &ranges, bare.as_ref());
+            let (_, xhi, _) = resolve("x", &ranges, bare.as_ref());
+            let (ylo, _, _) = resolve("y", &ranges, bare.as_ref());
+            let (_, yhi, _) = resolve("y", &ranges, bare.as_ref());
+            p.blocks.push(Block::Cmd(format!("pt = points({n}, {xlo}, {xhi}, {ylo}, {yhi})")));
             continue;
         }
         // 矩阵
@@ -676,97 +815,79 @@ fn rule_convert(text: &str) -> Option<Parsed> {
             seen_matrix = true;
             p.hit = true;
             let (rows, cols) = detect_matrix_dims(clause).unwrap_or_else(|| ("3".to_string(), "3".to_string()));
-            p.name_used(&rows);
-            p.name_used(&cols);
-            let (lo, hi, def) = resolve("a", &ranges, bare.as_ref());
-            if def {
-                p.defaults = true;
-                p.warnings.push("未识别矩阵元素范围，默认 1~100".into());
-            }
+            let dim = |d: String, p: &mut Parsed| -> String {
+                if is_name_str(&d) && !p.used.contains(&d) {
+                    p.name_used(&d);
+                    let (lo, hi, def) = resolve(&d, &ranges, None);
+                    if def {
+                        p.defaults = true;
+                        p.warnings.push(format!("未识别 {d} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
+                    }
+                    p.implicit.push(NumItem { elem: Elem::Int, name: d.clone(), lo, hi, prec: None });
+                    d
+                } else {
+                    d
+                }
+            };
+            let rows = dim(rows, &mut p);
+            let cols = dim(cols, &mut p);
+            // 01/0-1 矩阵 → 元素范围 0,1
+            let (lo, hi) = if clause.contains("01") || clause.contains("0/1") || clause.contains("0-1") || clause.contains("二进制") {
+                ("0".to_string(), "1".to_string())
+            } else {
+                let (l, h, def) = resolve("a", &ranges, bare.as_ref());
+                if def {
+                    p.defaults = true;
+                    p.warnings.push("未识别矩阵元素范围，默认 1~100".into());
+                }
+                (l, h)
+            };
             p.blocks.push(Block::Cmd(format!("M = matrix({rows}, {cols}, {lo}, {hi})")));
             continue;
         }
     }
 
-    // ---- 行片段 / 数组（按指示词切分）----
-    for (frag, ctx) in segment_lines(text) {
-        match ctx {
-            Some(LineCtx::Single) | Some(LineCtx::Rows) => {
-                p.hit = true;
-        let rows = match ctx.unwrap() {
-            LineCtx::Single => "1".to_string(),
-            LineCtx::Rows => detect_rows_expr(&frag).unwrap_or_else(|| "n".to_string()),
-        };
-        if rows != "1" && is_name_str(&rows) {
-            p.name_used(&rows);
-        }
-        let items = items_from_clause(&frag, &mut p, &ranges, bare.as_ref());
-        p.blocks.push(Block::Line { rows, items });
-            }
-            None => {
-                // 非行片段：数组检测（「N 个整数」等）
-                if let Some(count) = detect_count(&frag) {
-                    p.hit = true;
-                    if is_name_str(&count) {
-                        p.name_used(&count);
+    // ---- 3) 多测计数变量（repeat 外定义）+ repeat_var ----
+    if let Some(v) = &multi_var {
+        p.name_used(v);
+        // 用户已在行块定义同名项（大小写不敏感）→ 取出复用其范围（t 移到 repeat 外定义）
+        let mut reused: Option<(String, String)> = None;
+        'outer: for b in &mut p.blocks {
+            if let Block::Line { items, .. } = b {
+                for (i, it) in items.iter().enumerate() {
+                    if it.name.to_lowercase() == *v {
+                        reused = Some((it.lo.clone(), it.hi.clone()));
+                        items.remove(i);
+                        break 'outer;
                     }
-                    let (elem, _) = detect_elem(&frag).unwrap_or((Elem::Int, Vec::new()));
-                    let (lo, hi, def) = resolve("a", &ranges, bare.as_ref());
-                    if def {
-                        p.defaults = true;
-                        p.warnings.push("未识别数组元素范围，默认 1~100".into());
-                    }
-                    p.blocks.push(Block::Cmd(format!(
-                        "a = {}({count}, {lo}, {hi})",
-                        if elem == Elem::Float { "floats" } else { "ints" }
-                    )));
                 }
             }
         }
-    }
-
-    // ---- 多测注释（放在最前）+ 组数变量 ----
-    if let Some(v) = &multi_var {
-        p.name_used(v);
-        let (lo, hi, def) = resolve(v, &ranges, bare.as_ref());
+        // 移除计数变量后若行块为空则整个移除
+        p.blocks.retain(|b| match b {
+            Block::Line { items, .. } => !items.is_empty(),
+            _ => true,
+        });
+        // 行块 rows 若引用计数变量（「接下来 T 组」→ line (t)）统一改名
+        for b in &mut p.blocks {
+            if let Block::Line { rows, .. } = b {
+                if rows.to_lowercase() == *v {
+                    *rows = v.clone();
+                }
+            }
+        }
+        let (lo, hi, def) = match reused {
+            Some((l, h)) => (l, h, false),
+            None => {
+                let (l, h, d) = resolve(v, &ranges, bare.as_ref());
+                (l, h, d)
+            }
+        };
         if def {
             p.defaults = true;
             p.warnings.push(format!("未识别组数 {v} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
         }
-        // 第一个行块：若已有大小写不敏感同名字段则改名复用其范围，否则前置一行
-        if let Some(first) = p.blocks.iter_mut().find(|b| matches!(b, Block::Line { .. })) {
-            if let Block::Line { items, .. } = first {
-                if let Some(it) = items.iter_mut().find(|it| it.name.to_lowercase() == *v) {
-                    it.name = v.clone();
-                    // 保留其范围（可能比默认更准）
-                } else {
-                    items.insert(
-                        0,
-                        NumItem {
-                            elem: Elem::Int,
-                            name: v.clone(),
-                            lo,
-                            hi,
-                            prec: None,
-                        },
-                    );
-                }
-            }
-        } else {
-            p.blocks.insert(
-                0,
-                Block::Line {
-                    rows: "1".to_string(),
-                    items: vec![NumItem {
-                        elem: Elem::Int,
-                        name: v.clone(),
-                        lo,
-                        hi,
-                        prec: None,
-                    }],
-                },
-            );
-        }
+        p.repeat_count = Some(NumItem { elem: Elem::Int, name: v.clone(), lo, hi, prec: None });
         p.repeat_var = Some(v.clone());
     }
 
@@ -776,7 +897,7 @@ fn rule_convert(text: &str) -> Option<Parsed> {
     Some(p)
 }
 
-/// 从行描述 clause 提取行内项。
+/// 从行描述 clause 提取行内项（支持一行多个类型词，如「两个整数 u v 和一个浮点数 w」）。
 fn items_from_clause(
     clause: &str,
     p: &mut Parsed,
@@ -784,7 +905,21 @@ fn items_from_clause(
     bare: Option<&Range>,
 ) -> Vec<NumItem> {
     let mut items: Vec<NumItem> = Vec::new();
-    if let Some((elem, mut vars)) = detect_elem(clause) {
+    let prec = detect_prec(clause);
+    let mut rest = clause;
+    let mut found = false;
+    while let Some((elem, mut vars)) = detect_elem(rest) {
+        found = true;
+        // 从类型词后继续扫描（同一行可能还有别的类型词）
+        let m = detect_elem_pos(rest);
+        rest = match m {
+            Some((start, len)) => {
+                let next = start + len;
+                if next < rest.len() { &rest[next..] } else { "" }
+            }
+            None => "",
+        };
+        let mut used_in_clause: Vec<String> = Vec::new();
         // 显式变量名优先；没有则自动分配
         if vars.is_empty() {
             let pref = match elem {
@@ -792,10 +927,14 @@ fn items_from_clause(
                 Elem::Float => "x",
                 Elem::Str | Elem::Text => "s",
             };
-            vars.push(p.take_name(pref));
+            let fresh = p.take_name(pref);
+            used_in_clause.push(fresh.clone());
+            vars.push(fresh);
         }
-        let mut used_in_clause: Vec<String> = Vec::new();
         for name in &mut vars {
+            if used_in_clause.contains(name) {
+                continue;
+            }
             if p.used.contains(name) || used_in_clause.contains(name) {
                 let fresh = p.take_name("v");
                 used_in_clause.push(fresh.clone());
@@ -810,9 +949,16 @@ fn items_from_clause(
                 p.defaults = true;
                 p.warnings.push(format!("未识别 {name} 的范围，默认 {DEFAULT_LO}~{DEFAULT_HI}"));
             }
-            items.push(NumItem { elem, name, lo, hi, prec: None });
+            items.push(NumItem {
+                elem,
+                name,
+                lo,
+                hi,
+                prec: prec.clone(),
+            });
         }
-    } else {
+    }
+    if !found {
         // 无类型词：兜底一个整数项
         p.defaults = true;
         p.warnings.push("未识别行内数据类型，默认生成一个整数项".into());
@@ -826,44 +972,90 @@ fn items_from_clause(
     items
 }
 
+/// 找到第一个类型词的位置与长度（辅助多类型词扫描）。
+fn detect_elem_pos(s: &str) -> Option<(usize, usize)> {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    let re = RX.get_or_init(|| {
+        Regex::new(
+            r"(浮点数|整型|整数|实数|小数|浮点型|浮点|字符串|字符型|字符|文本|数字|integers|integer|floats|float|numbers|number|elements|element|string|double|real|char|int)",
+        )
+        .expect("nlg elem pos regex")
+    });
+    let is_ascii_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let bit_small = "位".as_bytes();
+    for m in re.find_iter(s) {
+        let before = m.start() > 0 && is_ascii_word(s.as_bytes()[m.start() - 1]);
+        let after = m.end() < s.len() && is_ascii_word(s.as_bytes()[m.end()]);
+        // 「3 位小数」的「小数」是精度语境，不是类型词
+        let kw = &s[m.start()..m.end()];
+        let prec_ctx = kw == "小数"
+            && m.start() >= 3
+            && &s.as_bytes()[m.start() - 3..m.start()] == bit_small;
+        if !before && !after && !prec_ctx {
+            return Some((m.start(), m.end() - m.start()));
+        }
+    }
+    None
+}
+
 // --------------------------------------------------------------------------- //
 // 渲染 + 管道
 // --------------------------------------------------------------------------- //
 
+/// 行内项渲染为一行（int/float/str）。
+fn item_line(it: &NumItem) -> String {
+    match it.elem {
+        Elem::Int => format!("    int {}: {}, {}", it.name, it.lo, it.hi),
+        Elem::Float => {
+            let prec = it.prec.clone().unwrap_or_else(|| "6".to_string());
+            if prec != "6" {
+                format!("    float {}: {}, {}, {}", it.name, it.lo, it.hi, prec)
+            } else {
+                format!("    float {}: {}, {}", it.name, it.lo, it.hi)
+            }
+        }
+        Elem::Str => format!("    str {}: int({}, {})", it.name, it.lo, it.hi),
+        Elem::Text => format!("    text {}: \"{}\"", it.name, it.lo),
+    }
+}
+
 fn render(p: &Parsed) -> String {
-    let mut out: Vec<String> = Vec::new();
+    let mut body: Vec<String> = Vec::new();
+    // 隐式数量变量定义行（在最前；多测时位于 repeat 块内）
+    if !p.implicit.is_empty() {
+        body.push("line:".to_string());
+        for it in &p.implicit {
+            body.push(item_line(it));
+        }
+    }
     for b in &p.blocks {
         match b {
-            Block::Cmd(c) => out.push(c.clone()),
+            Block::Cmd(c) => body.push(c.clone()),
             Block::Line { rows, items } => {
                 if rows == "1" {
-                    out.push("line:".to_string());
+                    body.push("line:".to_string());
                 } else {
-                    out.push(format!("line ({rows}):"));
+                    body.push(format!("line ({rows}):"));
                 }
                 for it in items {
-                    let line = if it.elem == Elem::Float {
-                        let prec = it.prec.clone().unwrap_or_else(|| "6".to_string());
-                        if prec != "6" {
-                            format!("    float {}: {}, {}, {}", it.name, it.lo, it.hi, prec)
-                        } else {
-                            format!("    float {}: {}, {}", it.name, it.lo, it.hi)
-                        }
-                    } else {
-                        format!("    {} {}: {}, {}", it.elem.label(), it.name, it.lo, it.hi)
-                    };
-                    out.push(line);
+                    body.push(item_line(it));
                 }
             }
         }
     }
-    // 多测（repeat 块）：所有块缩进 4 空格，头部 repeat (t):
+    let mut out: Vec<String> = Vec::new();
+    // 多测：计数行（repeat 外）+ repeat 块（body 缩进）
     if let Some(v) = &p.repeat_var {
-        let mut indented = vec![format!("repeat ({v}):")];
-        for l in out {
-            indented.push(format!("    {l}"));
+        if let Some(rc) = &p.repeat_count {
+            out.push("line:".to_string());
+            out.push(item_line(rc));
         }
-        out = indented;
+        out.push(format!("repeat ({v}):"));
+        for l in body {
+            out.push(format!("    {l}"));
+        }
+    } else {
+        out.extend(body);
     }
     out.join("\n")
 }
@@ -954,6 +1146,84 @@ mod tests {
     }
 
     #[test]
+    fn mixed_types_in_row() {
+        let r = conv("第一行一个整数 n，接下来 n 行每行两个整数 u v 和一个浮点数 w (0<=w<=1)");
+        assert!(r.dsl.contains("line (n):"), "{}", r.dsl);
+        assert!(r.dsl.contains("int u: 1, 100"), "{}", r.dsl);
+        assert!(r.dsl.contains("int v: 1, 100"), "{}", r.dsl);
+        assert!(r.dsl.contains("float w: 0, 1"), "{}", r.dsl);
+    }
+
+    #[test]
+    fn float_precision() {
+        let r = conv("第一行一个浮点数 x，保留 3 位小数");
+        let _ = std::fs::write(
+            "C:\\Users\\pigeon\\AppData\\Local\\Temp\\opencode\\fp.txt",
+            format!("warn={:?}\n{}", r.warnings, r.dsl),
+        );
+        assert!(r.dsl.contains("float x: 1, 100, 3"), "{}", r.dsl);
+    }
+
+    #[test]
+    fn intervals_with_lr_chain() {
+        let r = conv("n 个区间 [l, r]，1<=l<=r<=10^9");
+        let _ = std::fs::write(
+            "C:\\Users\\pigeon\\AppData\\Local\\Temp\\opencode\\iv.txt",
+            format!("warn={:?}\n{}", r.warnings, r.dsl),
+        );
+        assert!(r.dsl.contains("iv = intervals(n, 1, 1000000000)"), "{}", r.dsl);
+        assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
+    }
+
+    #[test]
+    fn tree_weight_default_ok() {
+        let r = conv("一棵树的边带权，权值 1 到 10");
+        assert!(r.dsl.contains("t = tree(n, int(1, 10))"), "{}", r.dsl);
+    }
+
+    #[test]
+    fn powers_of_ten() {
+        let r = conv("第一行两个整数 n m (1<=n,m<=10^5)");
+        let _ = std::fs::write(
+            "C:\\Users\\pigeon\\AppData\\Local\\Temp\\opencode\\pot.txt",
+            format!("warn={:?}\n{}", r.warnings, r.dsl),
+        );
+        assert!(r.dsl.contains("int n: 1, 100000"), "{}", r.dsl);
+        assert!(r.dsl.contains("int m: 1, 100000"), "{}", r.dsl);
+    }
+
+    #[test]
+    fn zero_one_matrix() {
+        let r = conv("n 行 m 列的 01 矩阵");
+        assert!(r.dsl.contains("M = matrix(n, m, 0, 1)"), "{}", r.dsl);
+    }
+
+    #[test]
+    fn str_row_random_len() {
+        let r = conv("n 行每行一个字符串，长度不超过 100");
+        let _ = std::fs::write(
+            "C:\\Users\\pigeon\\AppData\\Local\\Temp\\opencode\\str.txt",
+            format!("warn={:?}\n{}", r.warnings, r.dsl),
+        );
+        assert!(r.dsl.contains("str s: int(1, 100)"), "{}", r.dsl);
+        assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
+    }
+
+    #[test]
+    fn multi_test_mixed_theme() {
+        let r = conv("T 组数据，每组：第一行 n m，接下来 n 行每行 m 个整数");
+        assert!(r.dsl.contains("repeat (t):"), "{}", r.dsl);
+        assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
+    }
+
+    #[test]
+    fn english_multi_test() {
+        let r = conv("T test cases. each test case: first line contains n, then n lines with m integers");
+        assert!(r.dsl.contains("repeat (t):"), "{}", r.dsl);
+        assert!(_parse_for_test(&r.dsl).is_ok(), "{}", r.dsl);
+    }
+
+    #[test]
     fn single_line_two_ints() {
         let r = conv("第一行两个整数 n m，1 <= n, m <= 100");
         assert_eq!(r.method, NlMethod::Rule);
@@ -964,8 +1234,7 @@ mod tests {
     #[test]
     fn multi_test_first_line() {
         let r = conv("多测，T 组。第一行一个整数 n (1<=n<=10^5)，接下来 n 行每行一个整数 x");
-        eprintln!("MTFL dsl={:?} warn={:?} conf={}", r.dsl, r.warnings, r.confidence);
-        assert!(r.dsl.starts_with("repeat (t):"), "{}", r.dsl);
+        assert!(r.dsl.contains("repeat (t):"), "{}", r.dsl);
         assert!(r.dsl.contains("int n: 1, 100000"), "{}", r.dsl);
         assert!(r.dsl.contains("    line (n):\n        int x: 1, 100"), "{}", r.dsl);
     }
@@ -980,13 +1249,13 @@ mod tests {
     #[test]
     fn array_of_n_ints() {
         let r = conv("一个 n 个整数的数组，元素范围 1 到 100");
-        assert_eq!(r.dsl, "a = ints(n, 1, 100)");
+        assert_eq!(r.dsl, "line:\n    int n: 1, 100\na = ints(n, 1, 100)");
     }
 
     #[test]
     fn matrix() {
         let r = conv("一个 n 行 m 列的矩阵，每个元素 0 到 1");
-        assert_eq!(r.dsl, "M = matrix(n, m, 0, 1)");
+        assert_eq!(r.dsl, "line:\n    int n: 1, 100\n    int m: 1, 100\nM = matrix(n, m, 0, 1)");
     }
 
     #[test]
@@ -998,7 +1267,7 @@ mod tests {
     #[test]
     fn tree_plain() {
         let r = conv("n 个点的树");
-        assert_eq!(r.dsl, "t = tree(n)");
+        assert_eq!(r.dsl, "line:\n    int n: 1, 100\nt = tree(n)");
     }
 
     #[test]
@@ -1028,7 +1297,7 @@ mod tests {
     #[test]
     fn permutation() {
         let r = conv("n 的一个排列");
-        assert_eq!(r.dsl, "p = perm(n)");
+        assert_eq!(r.dsl, "line:\n    int n: 1, 100\np = perm(n)");
     }
 
     #[test]
@@ -1041,7 +1310,7 @@ mod tests {
     #[test]
     fn english_array() {
         let r = conv("an array of n integers in [1, 10^9]");
-        assert_eq!(r.dsl, "a = ints(n, 1, 1000000000)");
+        assert_eq!(r.dsl, "line:\n    int n: 1, 100\na = ints(n, 1, 1000000000)");
     }
 
     #[test]
@@ -1061,7 +1330,7 @@ mod tests {
     #[test]
     fn multi_test_with_explicit_t() {
         let r = conv("第一行一个整数 T (1<=T<=10)，接下来 T 组，每组第一行一个整数 n，然后 n 行每行一个整数");
-        assert!(r.dsl.starts_with("repeat (t):"), "{}", r.dsl);
+        assert!(r.dsl.contains("repeat (t):"), "warn={:?} dsl={}", r.warnings, r.dsl);
         assert!(r.dsl.contains("int t: 1, 10"), "{}", r.dsl);
         assert!(r.dsl.contains("line (n):"), "{}", r.dsl);
     }

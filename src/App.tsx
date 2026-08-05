@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as monaco from "monaco-editor";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   dslParseChecked,
   dslSerialize,
   ping,
+  readTextFile,
+  saveTextFile,
   type Config,
   type DslError,
   type GenMode,
@@ -11,6 +14,7 @@ import {
   type ProgramSpec,
 } from "./api";
 import { registerDslLanguage } from "./dslLanguage";
+import { DSL_TEMPLATES } from "./templates";
 import DslEditor from "./components/DslEditor";
 import VariableList from "./components/VariableList";
 import GeneratePanel from "./components/GeneratePanel";
@@ -20,7 +24,13 @@ import { Panel, SplitHandle } from "./components/Panel";
 
 const COLLAPSED_KEY = "duipai_collapsed";
 const HEIGHTS_KEY = "duipai_heights";
+const SAVES_KEY = "duipai_dsl_saves";
 const PANEL_COUNT = 5;
+
+interface DslSave {
+  name: string;
+  dsl: string;
+}
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -52,6 +62,71 @@ export default function App() {
   itemsRef.current = items;
   const dslRef = useRef(dsl);
   dslRef.current = dsl;
+
+  // ---- 模板库与配置管理 ----
+  const [saves, setSaves] = useState<DslSave[]>(() => loadJson(SAVES_KEY, [] as DslSave[]));
+  const [templateIdx, setTemplateIdx] = useState(0);
+  const [saveName, setSaveName] = useState("");
+  const [saveErr, setSaveErr] = useState("");
+  useEffect(() => {
+    localStorage.setItem(SAVES_KEY, JSON.stringify(saves));
+  }, [saves]);
+
+  const loadTemplate = () => {
+    setDsl(DSL_TEMPLATES[templateIdx]?.dsl ?? "");
+    setEditorFocused(false);
+  };
+
+  const saveCurrent = () => {
+    const name = saveName.trim() || `保存 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
+    setSaves((s) => {
+      const next = s.filter((x) => x.name !== name);
+      next.push({ name, dsl: dslRef.current });
+      return next;
+    });
+    setSaveName("");
+    setSaveErr("");
+  };
+
+  const loadSave = (name: string) => {
+    const s = saves.find((x) => x.name === name);
+    if (s) {
+      setDsl(s.dsl);
+      setEditorFocused(false);
+    }
+  };
+
+  const deleteSave = (name: string) => setSaves((s) => s.filter((x) => x.name !== name));
+
+  const exportDsl = async () => {
+    const path = await save({
+      title: "导出 DSL",
+      defaultPath: "input.dsl",
+      filters: [{ name: "DSL", extensions: ["dsl", "txt"] }],
+    });
+    if (!path) return;
+    try {
+      await saveTextFile(path, dslRef.current);
+    } catch (e) {
+      setSaveErr(`导出失败：${String(e)}`);
+    }
+  };
+
+  const importDsl = async () => {
+    const path = await open({
+      title: "导入 DSL",
+      multiple: false,
+      filters: [{ name: "DSL", extensions: ["dsl", "txt"] }],
+    });
+    if (!path || Array.isArray(path)) return;
+    try {
+      const text = await readTextFile(path);
+      setDsl(text);
+      setEditorFocused(false);
+    } catch (e) {
+      setSaveErr(`导入失败：${String(e)}`);
+    }
+  };
 
   // 面板折叠 / 拖拽高度（localStorage 持久化）
   // 旧版本可能存了更少面板的数组：长度不符时整体重置，避免折叠/拖拽失效
@@ -198,11 +273,77 @@ export default function App() {
           collapsed={collapsed[1]}
           onToggle={() => togglePanel(1)}
           actions={
-            <button onClick={() => applyFromDsl()} title="Ctrl+Enter">
-              应用（解析为图形化列表）
-            </button>
+            <>
+              <select
+                className="toolbar-select"
+                value={templateIdx}
+                onChange={(e) => setTemplateIdx(Number(e.target.value))}
+                title="常用题型模板"
+              >
+                {DSL_TEMPLATES.map((t, i) => (
+                  <option key={t.name} value={i}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              <button onClick={loadTemplate} title="载入选中的题型模板">
+                载入模板
+              </button>
+              <input
+                className="save-name-input"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                placeholder="保存为…"
+                title="给当前 DSL 起名保存（本机）"
+              />
+              <button onClick={saveCurrent}>保存</button>
+              {saves.length > 0 && (
+                <>
+                  <select
+                    className="toolbar-select"
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) loadSave(e.target.value);
+                    }}
+                    title="载入已保存的 DSL"
+                  >
+                    <option value="">已保存…</option>
+                    {saves.map((s) => (
+                      <option key={s.name} value={s.name}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="toolbar-select"
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) deleteSave(e.target.value);
+                    }}
+                    title="删除已保存的 DSL"
+                  >
+                    <option value="">删除…</option>
+                    {saves.map((s) => (
+                      <option key={s.name} value={s.name}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+              <button onClick={importDsl} title="从 .dsl 文件导入">
+                导入
+              </button>
+              <button onClick={exportDsl} title="导出为 .dsl 文件">
+                导出
+              </button>
+              <button onClick={() => applyFromDsl()} title="Ctrl+Enter">
+                应用（解析为图形化列表）
+              </button>
+            </>
           }
         >
+          {saveErr && <div className="gen-error">{saveErr}</div>}
           <div className="editor-wrap">
             <DslEditor
               value={dsl}
