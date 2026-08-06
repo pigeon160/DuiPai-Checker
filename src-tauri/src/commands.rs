@@ -344,6 +344,7 @@ pub fn model_download(app: AppHandle, url: String) -> Result<String, String> {
         .to_string();
     let dest = dir.join(&name);
     let dest_str = dest.to_string_lossy().to_string();
+    let dest_ok = dest_str.clone();
     let handler = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{BufRead, BufReader};
@@ -391,10 +392,17 @@ pub fn model_download(app: AppHandle, url: String) -> Result<String, String> {
             }
         }
         match child.wait() {
-            Ok(st) if st.success() => emit("done", Some(100), "下载完成"),
+            Ok(st) if st.success() => {
+                // 下载完成自动把路径写入配置：用户直接点「加载」即可用
+                if let Ok(mut cfg) = load_config(&handler) {
+                    cfg.path = Some(dest_str.clone());
+                    let _ = save_config(&handler, &cfg);
+                }
+                emit("done", Some(100), "下载完成，已自动设置模型路径");
+            }
             Ok(_) => emit("error", None, "下载失败"),
             Err(e) => emit("error", None, &format!("下载失败：{e}")),
         }
     });
-    Ok(dest_str)
+    Ok(dest_ok)
 }

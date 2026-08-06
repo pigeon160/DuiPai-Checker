@@ -30,7 +30,15 @@ export default function NlPanel({ onLoadDsl }: Props) {
   const [loadingModel, setLoadingModel] = useState(false);
   const [threadMode, setThreadMode] = useState<"auto" | "all" | "custom">("auto");
   const [customThreads, setCustomThreads] = useState(8);
+  const [quickModel, setQuickModel] = useState<"3B" | "1.5B" | "0.5B">("3B");
   const dlStateRef = useRef<"idle" | "start" | "progress" | "done" | "error">("idle");
+
+  /** 内置模型下载源（hf-mirror 镜像，官方 Qwen2.5 GGUF）。 */
+  const QUICK_URLS: Record<string, string> = {
+    "0.5B": "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    "1.5B": "https://hf-mirror.com/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "3B": "https://hf-mirror.com/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+  };
 
   const refreshModel = async () => {
     try {
@@ -125,6 +133,18 @@ export default function NlPanel({ onLoadDsl }: Props) {
       );
     } catch (e) {
       setModelMsg(String(e));
+    }
+  };
+
+  const onQuickDownload = async () => {
+    const url = QUICK_URLS[quickModel];
+    setDlBusy(true);
+    setModelMsg("");
+    try {
+      await modelDownload(url);
+    } catch (e) {
+      setModelMsg(String(e));
+      setDlBusy(false);
     }
   };
 
@@ -247,6 +267,27 @@ export default function NlPanel({ onLoadDsl }: Props) {
           </button>
           <button className="btn-secondary" onClick={onDownload} disabled={dlBusy || loadingModel}>
             {dlBusy ? "下载中…" : "下载模型"}
+          </button>
+        </div>
+        <div className="nl-model-row">
+          <label className="nl-thread-label">一键下载</label>
+          <select
+            className="nl-thread-select"
+            value={quickModel}
+            onChange={(e) => setQuickModel(e.target.value as "3B" | "1.5B" | "0.5B")}
+            title="从 hf-mirror 镜像直接下载官方量化模型（国内可访问）"
+          >
+            <option value="3B">Qwen2.5-3B（推荐，~2GB）</option>
+            <option value="1.5B">Qwen2.5-1.5B（~1GB，更快）</option>
+            <option value="0.5B">Qwen2.5-0.5B（~470MB，最快）</option>
+          </select>
+          <button
+            className="btn-secondary"
+            onClick={onQuickDownload}
+            disabled={dlBusy || loadingModel}
+            title="下载后自动设置路径，直接点「加载」即可使用"
+          >
+            下载所选模型
           </button>
         </div>
         {dlBusy && dlPct != null && (
