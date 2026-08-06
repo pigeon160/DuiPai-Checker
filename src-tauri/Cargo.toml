@@ -1,6 +1,6 @@
 [package]
 name = "duipai-checker"
-version = "1.0.2"
+version = "1.1.0"
 edition = "2021"
 description = "对拍检查器（Tauri 壳层，仅暴露 IPC，逻辑在 duipai-core）"
 
@@ -16,5 +16,5 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-duipai-core = { path = "../crates/duipai-core" }
+duipai-core = { path = "../crates/duipai-core", features = ["nl-model"] }
 rand = "0.9"

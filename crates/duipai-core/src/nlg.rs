@@ -43,6 +43,8 @@ pub struct NlResult {
     pub method: NlMethod,
     /// 非致命提示（默认值推断、无法识别的句子等）。
     pub warnings: Vec<String>,
+    /// 模型思维链（模型通道转换时的「分析：」内容；规则引擎为空）。
+    pub thought: String,
 }
 
 // --------------------------------------------------------------------------- //
@@ -1230,6 +1232,7 @@ pub fn rule_to_dsl(text: &str) -> Option<NlResult> {
                 confidence: confidence_of(&p),
                 method: NlMethod::Rule,
                 warnings,
+                thought: String::new(),
             })
         }
         Err(e) => {
@@ -1242,6 +1245,7 @@ pub fn rule_to_dsl(text: &str) -> Option<NlResult> {
                 confidence: 0.0,
                 method: NlMethod::Rule,
                 warnings: vec![format!("规则生成结果未通过解析：{}", e.message)],
+                thought: String::new(),
             })
         }
     }
@@ -1252,6 +1256,12 @@ pub fn rule_to_dsl(text: &str) -> Option<NlResult> {
 /// 规则命中（置信度 > 0）直接返回；未命中且模型通道就绪时走本地大模型
 /// 推理（parse + validate 校验重试 ≤2 次）；模型不可用时返回低置信失败结果。
 pub fn nl_to_dsl(text: &str) -> NlResult {
+    nl_to_dsl_opt(text, false)
+}
+
+/// 同 [`nl_to_dsl`]，但 `model_only=true` 时跳过规则引擎，直接走模型
+/// （模型未就绪或失败时返回失败提示，不回退规则）。
+pub fn nl_to_dsl_opt(text: &str, model_only: bool) -> NlResult {
     let text = text.trim();
     if text.is_empty() {
         return NlResult {
@@ -1259,11 +1269,14 @@ pub fn nl_to_dsl(text: &str) -> NlResult {
             confidence: 0.0,
             method: NlMethod::Rule,
             warnings: vec!["输入为空".to_string()],
+            thought: String::new(),
         };
     }
-    if let Some(r) = rule_to_dsl(text) {
-        if r.confidence > 0.0 {
-            return r;
+    if !model_only {
+        if let Some(r) = rule_to_dsl(text) {
+            if r.confidence > 0.0 {
+                return r;
+            }
         }
     }
     #[cfg(feature = "nl-model")]
@@ -1279,6 +1292,7 @@ pub fn nl_to_dsl(text: &str) -> NlResult {
                     confidence: r.confidence,
                     method: NlMethod::Model,
                     warnings: Vec::new(),
+                    thought: r.thought,
                 };
             }
             Ok(_) => {
@@ -1287,6 +1301,7 @@ pub fn nl_to_dsl(text: &str) -> NlResult {
                     confidence: 0.0,
                     method: NlMethod::Model,
                     warnings: vec!["模型推理输出为空".to_string()],
+                    thought: String::new(),
                 };
             }
             Err(e) => {
@@ -1295,9 +1310,21 @@ pub fn nl_to_dsl(text: &str) -> NlResult {
                     confidence: 0.0,
                     method: NlMethod::Model,
                     warnings: vec![format!("模型推理失败：{e}")],
+                    thought: String::new(),
                 };
             }
         }
+    }
+    if model_only {
+        return NlResult {
+            dsl: String::new(),
+            confidence: 0.0,
+            method: NlMethod::Model,
+            warnings: vec![
+                "模型通道未启用或模型未加载：请先在模型状态区设置路径并加载".to_string(),
+            ],
+            thought: String::new(),
+        };
     }
     NlResult {
         dsl: String::new(),
@@ -1307,6 +1334,7 @@ pub fn nl_to_dsl(text: &str) -> NlResult {
             "未识别输入格式：请用类似「第一行两个整数 n m，接下来 n 行每行两个整数」的描述".to_string(),
             "模型通道未启用或未加载：当前仅规则引擎可用".to_string(),
         ],
+        thought: String::new(),
     }
 }
 

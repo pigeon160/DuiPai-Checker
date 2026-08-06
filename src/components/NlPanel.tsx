@@ -4,6 +4,7 @@ import {
   modelDownload,
   modelLoad,
   modelSetPath,
+  modelSetThreads,
   modelStatus,
   nlToDsl,
   type ModelProgress,
@@ -20,12 +21,15 @@ export default function NlPanel({ onLoadDsl }: Props) {
   const [result, setResult] = useState<NlResult | null>(null);
   const [converting, setConverting] = useState(false);
   const [convError, setConvError] = useState("");
+  const [modelOnly, setModelOnly] = useState(true);
   const [model, setModel] = useState<ModelStatus | null>(null);
   const [modelPathInput, setModelPathInput] = useState("");
   const [modelMsg, setModelMsg] = useState("");
   const [dlBusy, setDlBusy] = useState(false);
   const [dlPct, setDlPct] = useState<number | null>(null);
   const [loadingModel, setLoadingModel] = useState(false);
+  const [threadMode, setThreadMode] = useState<"auto" | "all" | "custom">("auto");
+  const [customThreads, setCustomThreads] = useState(8);
   const dlStateRef = useRef<"idle" | "start" | "progress" | "done" | "error">("idle");
 
   const refreshModel = async () => {
@@ -33,6 +37,12 @@ export default function NlPanel({ onLoadDsl }: Props) {
       const s = await modelStatus();
       setModel(s);
       setModelPathInput(s.path ?? "");
+      if (s.threads === null) setThreadMode("auto");
+      else if (s.threads === 0) setThreadMode("all");
+      else {
+        setThreadMode("custom");
+        setCustomThreads(s.threads);
+      }
     } catch (e) {
       setModelMsg(`模型状态获取失败：${String(e)}`);
     }
@@ -70,7 +80,7 @@ export default function NlPanel({ onLoadDsl }: Props) {
     setConverting(true);
     setConvError("");
     try {
-      const r = await nlToDsl(text);
+      const r = await nlToDsl(text, modelOnly);
       setResult(r);
     } catch (e) {
       setConvError(String(e));
@@ -101,6 +111,20 @@ export default function NlPanel({ onLoadDsl }: Props) {
       setModelMsg(String(e));
     } finally {
       setLoadingModel(false);
+    }
+  };
+
+  const onSetThreads = async (mode: "auto" | "all" | "custom") => {
+    setModelMsg("");
+    try {
+      const v = mode === "auto" ? null : mode === "all" ? 0 : customThreads;
+      const s = await modelSetThreads(v);
+      setModel(s);
+      setModelMsg(
+        mode === "auto" ? "推理线程：自动（留 2 核给界面）" : mode === "all" ? "推理线程：全部核" : `推理线程：${customThreads}`
+      );
+    } catch (e) {
+      setModelMsg(String(e));
     }
   };
 
@@ -150,6 +174,14 @@ export default function NlPanel({ onLoadDsl }: Props) {
           >
             载入编辑器
           </button>
+          <label className="model-only-label" title="勾选后跳过规则引擎，直接由本地大模型转换（需已加载模型）">
+            <input
+              type="checkbox"
+              checked={modelOnly}
+              onChange={(e) => setModelOnly(e.target.checked)}
+            />
+            直接用模型
+          </label>
         </div>
       </div>
 
@@ -172,6 +204,12 @@ export default function NlPanel({ onLoadDsl }: Props) {
                 <li key={i}>{w}</li>
               ))}
             </ul>
+          )}
+          {result.method === "Model" && result.thought.trim() && (
+            <details className="nl-thought">
+              <summary>模型分析（思维链）</summary>
+              <pre>{result.thought}</pre>
+            </details>
           )}
           {result.dsl ? (
             <pre className="nl-dsl">{result.dsl}</pre>
@@ -216,6 +254,38 @@ export default function NlPanel({ onLoadDsl }: Props) {
             <div className="dl-progress-bar" style={{ width: `${dlPct}%` }} />
           </div>
         )}
+        <div className="nl-model-row">
+          <label className="nl-thread-label">推理线程数</label>
+          <select
+            className="nl-thread-select"
+            value={threadMode}
+            onChange={(e) => {
+              const m = e.target.value as "auto" | "all" | "custom";
+              setThreadMode(m);
+              onSetThreads(m);
+            }}
+            title="推理占用核数：自动默认留 2 核给界面，发热敏感可再调低"
+          >
+            <option value="auto">自动（留 2 核给界面）</option>
+            <option value="all">全部核（最快）</option>
+            <option value="custom">自定义</option>
+          </select>
+          {threadMode === "custom" && (
+            <>
+              <input
+                className="nl-thread-num"
+                type="number"
+                min={1}
+                max={64}
+                value={customThreads}
+                onChange={(e) => setCustomThreads(Math.max(1, Number(e.target.value) || 1))}
+              />
+              <button className="btn-secondary" onClick={() => onSetThreads("custom")}>
+                应用
+              </button>
+            </>
+          )}
+        </div>
         {modelMsg && <div className="stale-hint nl-model-msg">{modelMsg}</div>}
         <p className="nl-model-hint">
           模型推理通道（llama.cpp，nl-model 编译特性）：放置 GGUF 模型文件后可加载，

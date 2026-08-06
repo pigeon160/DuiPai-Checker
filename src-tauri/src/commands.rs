@@ -125,16 +125,20 @@ pub fn open_dir(path: String) -> Result<(), String> {
         .map_err(|e| format!("打开目录失败：{e}"))
 }
 
-/// 编译 C++ 源码。
+/// 编译 C++ 源码（编译耗时可能数秒，放后台线程避免卡界面）。
 #[tauri::command]
-pub fn compile_program(
+pub async fn compile_program(
     source: String,
     workdir: String,
     name: String,
     compiler: String,
     flags: String,
 ) -> Result<String, DslError> {
-    safe(|| duipai_core::compile_cpp(&source, &workdir, &name, &compiler, &flags))
+    tauri::async_runtime::spawn_blocking(move || {
+        safe(|| duipai_core::compile_cpp(&source, &workdir, &name, &compiler, &flags))
+    })
+    .await
+    .map_err(|e| DslError::bare(format!("编译线程异常：{e}")))?
 }
 
 /// 运行单个程序（试运行用）。
@@ -214,10 +218,22 @@ pub fn duipai_running(state: State<'_, AppState>) -> bool {
 // 自然语言 → DSL
 // --------------------------------------------------------------------------- //
 
-/// 自然语言描述 -> DSL（规则引擎优先，模型通道未启用时仅规则）。
+/// 自然语言描述 -> DSL。`model_only=true` 时跳过规则引擎直接走模型。
+/// 推理耗时长（3B 模型 10~30s），必须在后台线程执行，避免冻结界面。
 #[tauri::command]
-pub fn nl_to_dsl_ipc(text: String) -> Result<duipai_core::NlResult, String> {
-    safe(|| Ok(nl_to_dsl(&text))).map_err(|e| e.message)
+pub async fn nl_to_dsl_ipc(
+    app: AppHandle,
+    text: String,
+    model_only: Option<bool>,
+) -> Result<duipai_core::NlResult, String> {
+    let cfg = load_config(&app)?;
+    duipai_core::set_infer_threads(cfg.threads);
+    tauri::async_runtime::spawn_blocking(move || {
+        safe(|| Ok(duipai_core::nl_to_dsl_opt(&text, model_only.unwrap_or(false))))
+            .map_err(|e| e.message)
+    })
+    .await
+    .map_err(|e| format!("转换线程异常：{e}"))?
 }
 
 /// 模型配置 JSON 路径（应用配置目录 models/config.json）。
@@ -254,6 +270,7 @@ fn current_status(app: &AppHandle) -> Result<ModelStatus, String> {
     let cfg = load_config(app)?;
     let mut st = ModelStatus::default();
     st.path = cfg.path.clone();
+    st.threads = cfg.threads;
     st.loaded = duipai_core::model_loaded();
     Ok(st)
 }
@@ -276,9 +293,20 @@ pub fn model_set_path(app: AppHandle, path: String) -> Result<ModelStatus, Strin
     current_status(&app)
 }
 
-/// 加载模型（nl-model 未启用时报错；启用后加载 GGUF）。
+/// 设置推理线程数并持久化（None=自动留 2 核；Some(0)=全部核；Some(n)=指定 n）。即时生效。
 #[tauri::command]
-pub fn model_load(app: AppHandle) -> Result<ModelStatus, String> {
+pub fn model_set_threads(app: AppHandle, threads: Option<u32>) -> Result<ModelStatus, String> {
+    let mut cfg = load_config(&app)?;
+    cfg.threads = threads;
+    save_config(&app, &cfg)?;
+    duipai_core::set_infer_threads(threads);
+    current_status(&app)
+}
+
+/// 加载模型（nl-model 未启用时报错；启用后加载 GGUF）。
+/// 加载 3B 模型需 10~30s，必须在后台线程执行，避免冻结界面。
+#[tauri::command]
+pub async fn model_load(app: AppHandle) -> Result<ModelStatus, String> {
     let cfg = load_config(&app)?;
     let path = cfg.path.clone().ok_or("未设置模型路径，请先设置或下载模型")?;
     if !check_model_path(&path) {
@@ -290,7 +318,9 @@ pub fn model_load(app: AppHandle) -> Result<ModelStatus, String> {
                 .to_string(),
         );
     }
-    duipai_core::model_load(&path).map_err(|e| e)?;
+    tauri::async_runtime::spawn_blocking(move || duipai_core::model_load(&path))
+        .await
+        .map_err(|e| format!("加载线程异常：{e}"))??;
     current_status(&app)
 }
 

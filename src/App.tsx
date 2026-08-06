@@ -23,7 +23,6 @@ import NlPanel from "./components/NlPanel";
 import { Panel, SplitHandle } from "./components/Panel";
 
 const COLLAPSED_KEY = "duipai_collapsed";
-const HEIGHTS_KEY = "duipai_heights";
 const CUSTOM_TPL_KEY = "duipai_custom_templates";
 const PANEL_COUNT = 5;
 
@@ -129,44 +128,18 @@ export default function App() {
     }
   };
 
-  // 面板折叠 / 拖拽高度（localStorage 持久化）
-  // 旧版本可能存了更少面板的数组：长度不符时整体重置，避免折叠/拖拽失效
+  // 面板折叠（localStorage 持久化）
+  // 旧版本可能存了更少面板的数组：长度不符时整体重置，避免折叠失效
   const [collapsed, setCollapsed] = useState<boolean[]>(() => {
     const c = loadJson(COLLAPSED_KEY, Array(PANEL_COUNT).fill(false));
     return c.length === PANEL_COUNT ? c : Array(PANEL_COUNT).fill(false);
   });
-  const [heights, setHeights] = useState<(number | null)[]>(() => {
-    const h = loadJson(HEIGHTS_KEY, Array(PANEL_COUNT).fill(null));
-    return h.length === PANEL_COUNT ? h : Array(PANEL_COUNT).fill(null);
-  });
   useEffect(() => {
     localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed));
   }, [collapsed]);
-  useEffect(() => {
-    localStorage.setItem(HEIGHTS_KEY, JSON.stringify(heights));
-  }, [heights]);
 
   const togglePanel = (i: number) =>
     setCollapsed((c) => c.map((v, j) => (j === i ? !v : v)));
-
-  /** 拖拽分隔条 i：调整上方面板高度 */
-  const resizePanel = (i: number) => (delta: number) => {
-    const base =
-      heights[i] ?? document.getElementById(`panel-${i}`)?.offsetHeight ?? 300;
-    const next = Math.min(2000, Math.max(60, base + delta));
-    setHeights((h) => {
-      const n = [...h];
-      n[i] = next;
-      return n;
-    });
-  };
-
-  const resetHeight = (i: number) =>
-    setHeights((h) => {
-      const n = [...h];
-      n[i] = null;
-      return n;
-    });
 
   // 语言注册（命令补全 + 变量名补全 + Ctrl+Enter 应用）
   useEffect(() => {
@@ -255,22 +228,16 @@ export default function App() {
         <Panel
           id={0}
           title="图形化变量列表（修改自动同步到下方 DSL）"
-          basis={heights[0]}
           collapsed={collapsed[0]}
           onToggle={() => togglePanel(0)}
         >
           <VariableList items={items} onChangeItems={setItems} />
         </Panel>
-        <SplitHandle
-          onResize={resizePanel(0)}
-          onReset={() => resetHeight(0)}
-          disabled={collapsed[0] || collapsed[1]}
-        />
+        <SplitHandle />
 
         <Panel
           id={1}
           title="DSL 编辑器"
-          basis={heights[1]}
           collapsed={collapsed[1]}
           onToggle={() => togglePanel(1)}
           actions={
@@ -373,16 +340,11 @@ export default function App() {
             </ul>
           )}
         </Panel>
-        <SplitHandle
-          onResize={resizePanel(1)}
-          onReset={() => resetHeight(1)}
-          disabled={collapsed[1] || collapsed[2]}
-        />
+        <SplitHandle />
 
         <Panel
           id={2}
           title="自然语言 → DSL"
-          basis={heights[2]}
           collapsed={collapsed[2]}
           onToggle={() => togglePanel(2)}
         >
@@ -393,31 +355,21 @@ export default function App() {
             }}
           />
         </Panel>
-        <SplitHandle
-          onResize={resizePanel(2)}
-          onReset={() => resetHeight(2)}
-          disabled={collapsed[2] || collapsed[3]}
-        />
+        <SplitHandle />
 
         <Panel
           id={3}
           title="数据生成预览"
-          basis={heights[3]}
           collapsed={collapsed[3]}
           onToggle={() => togglePanel(3)}
         >
           <GeneratePanel config={buildConfig()} genMode={genMode} ext={genMode === "External" ? ext : null} />
         </Panel>
-        <SplitHandle
-          onResize={resizePanel(3)}
-          onReset={() => resetHeight(3)}
-          disabled={collapsed[3] || collapsed[4]}
-        />
+        <SplitHandle />
 
         <Panel
           id={4}
           title="对拍"
-          basis={heights[4]}
           collapsed={collapsed[4]}
           onToggle={() => togglePanel(4)}
         >

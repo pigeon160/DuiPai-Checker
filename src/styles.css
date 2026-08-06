@@ -242,45 +242,21 @@ main.split {
 }
 
 .split-handle {
-  height: 7px;
-  flex: 0 0 7px;
+  height: 12px;
+  flex: 0 0 12px;
   background: var(--border-strong);
-  cursor: ns-resize;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.12s;
   touch-action: none;
 }
 
-.split-handle:hover,
-.split-handle.dragging {
-  background: var(--accent);
-}
-
-.split-handle.disabled {
-  cursor: default;
-}
-
-.split-handle.disabled:hover {
-  background: var(--border-strong);
-}
-
 .handle-grip {
-  width: 40px;
-  height: 3px;
+  width: 50px;
+  height: 4px;
   border-radius: 2px;
   background: #b9bec6;
-  transition: background 0.12s;
 }
-
-.split-handle:hover .handle-grip,
-.split-handle.dragging .handle-grip {
-  background: #fff;
-}
-
-/* 拖拽中禁止选中文本 */
-body.resizing {
   user-select: none;
   cursor: ns-resize;
 }
@@ -850,3 +826,10 @@ input.invalid,
 .dl-progress-bar {
   height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.2s;
 }
+.model-only-label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-2); cursor: pointer; }
+.nl-thought { margin: 8px 0; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg-1); }
+.nl-thought summary { cursor: pointer; font-size: 12px; color: var(--text-2); }
+.nl-thought pre { white-space: pre-wrap; font-size: 12px; color: var(--text-1); margin: 6px 0 4px; }
+.nl-thread-label { font-size: 12px; color: var(--text-2); }
+.nl-thread-select { padding: 2px 4px; font-size: 12px; background: var(--bg-1); color: var(--text-1); border: 1px solid var(--border); border-radius: 4px; }
+.nl-thread-num { width: 56px; padding: 2px 4px; font-size: 12px; background: var(--bg-1); color: var(--text-1); border: 1px solid var(--border); border-radius: 4px; }

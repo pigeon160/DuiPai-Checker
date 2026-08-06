@@ -244,10 +244,12 @@ export interface NlResult {
   confidence: number;
   method: NlMethod;
   warnings: string[];
+  /** 模型思维链（模型转换时的「分析：」内容；规则引擎为空）。 */
+  thought: string;
 }
 
-export function nlToDsl(text: string): Promise<NlResult> {
-  return invoke<NlResult>("nl_to_dsl_ipc", { text });
+export function nlToDsl(text: string, modelOnly = false): Promise<NlResult> {
+  return invoke<NlResult>("nl_to_dsl_ipc", { text, modelOnly });
 }
 
 /** 模型通道状态。 */
@@ -256,6 +258,8 @@ export interface ModelStatus {
   path: string | null;
   loaded: boolean;
   busy: boolean;
+  /** 推理线程数配置：null=自动留 2 核；0=全部核；n=指定。 */
+  threads: number | null;
 }
 
 /** 下载进度事件（model://progress）。 */
@@ -276,6 +280,11 @@ export function modelSetPath(path: string): Promise<ModelStatus> {
 
 export function modelLoad(): Promise<ModelStatus> {
   return invoke<ModelStatus>("model_load");
+}
+
+/** 设置推理线程数：null=自动（留 2 核给界面）；0=全部核；n=指定线程数。 */
+export function modelSetThreads(threads: number | null): Promise<ModelStatus> {
+  return invoke<ModelStatus>("model_set_threads", { threads });
 }
 
 export function modelDownload(url: string): Promise<string> {
