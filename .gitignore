@@ -26,3 +26,7 @@ opencode.jsonc
 
 # CodeGraph 索引（本地数据库，不入库）
 .codegraph/
+
+# opencode 项目指令与技能锁（本机开发工具，不入库）
+AGENTS.md
+skills-lock.json
