@@ -19,3 +19,10 @@ target/
 node_modules/
 src-tauri/gen/schemas/
 models/*.gguf
+
+# opencode 配置（本机开发工具，不入库）
+.opencode/
+opencode.jsonc
+
+# CodeGraph 索引（本地数据库，不入库）
+.codegraph/
